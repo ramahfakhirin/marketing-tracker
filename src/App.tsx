@@ -472,11 +472,11 @@ export default function App() {
               <div>
                 <div className="flex items-center gap-1.5">
                   <h1 className="text-sm md:text-base font-bold tracking-tight text-slate-900">
-                    AE Marketing Tracker
+                    Marketing & CRM Tracker Nanoidn
                   </h1>
                   <span className="text-[7px] md:text-[8px] font-extrabold tracking-widest bg-indigo-50 text-indigo-600 border border-indigo-100 px-1.5 py-0.5 rounded-md">PWA</span>
                 </div>
-                <p className="text-[10px] text-slate-500 font-medium hidden md:block">SISTEM PEMANTAUAN PROGRESS MARKETING & CRM</p>
+                <p className="text-[10px] text-slate-500 font-medium hidden md:block uppercase">Sistem Pemantauan Progress & Database Marketing Nanoidn</p>
               </div>
             </div>
 

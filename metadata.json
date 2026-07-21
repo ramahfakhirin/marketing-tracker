@@ -1,5 +1,5 @@
 {
-  "name": "Marketing Progress Tracker",
+  "name": "Marketing & CRM Tracker Nanoidn",
   "description": "A Progressive Web App (PWA) designed for Account Executives to easily track, update, and analyze marketing progress for schools with CRM features, Instagram integration, and WhatsApp quick-contact.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

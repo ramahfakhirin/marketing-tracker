@@ -64,10 +64,10 @@ export default function Login({ teamMembers, onLogin }: LoginProps) {
           </div>
         </div>
         <h2 className="mt-4 text-center text-2xl font-black text-slate-900 tracking-tight">
-          AE Marketing CRM & Tracker
+          Marketing & CRM Tracker Nanoidn
         </h2>
         <p className="mt-1 text-center text-xs text-slate-500 font-semibold uppercase tracking-wider">
-          Sistem Pemantauan Progress & Database Target
+          Sistem Pemantauan Progress & Database Marketing Nanoidn
         </p>
       </div>
 
@@ -134,55 +134,6 @@ export default function Login({ teamMembers, onLogin }: LoginProps) {
               </button>
             </div>
           </form>
-
-          {/* Quick-Access Testing Buttons section */}
-          <div className="pt-4 border-t border-slate-100" id="quick-login-pills">
-            <h3 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-center flex items-center justify-center gap-1.5 mb-3">
-              <Sparkles className="h-3.5 w-3.5 text-indigo-500 animate-pulse" /> Akun Pengujian (Klik untuk Masuk Instan)
-            </h3>
-            <div className="grid grid-cols-2 gap-2 text-center text-xs">
-              {demoUsers.superadmin && (
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin(demoUsers.superadmin!)}
-                  className="p-2 border border-indigo-100 bg-indigo-50/30 hover:bg-indigo-50 rounded-xl text-left cursor-pointer transition-all"
-                >
-                  <p className="font-bold text-indigo-800 text-[10px]">Super Admin</p>
-                  <p className="text-[8px] text-slate-400 mt-0.5">superadmin / admin123</p>
-                </button>
-              )}
-              {demoUsers.manager && (
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin(demoUsers.manager!)}
-                  className="p-2 border border-slate-200 bg-slate-50/50 hover:bg-slate-50 rounded-xl text-left cursor-pointer transition-all"
-                >
-                  <p className="font-bold text-slate-700 text-[10px]">Manager</p>
-                  <p className="text-[8px] text-slate-400 mt-0.5">manager / manager123</p>
-                </button>
-              )}
-              {demoUsers.ae && (
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin(demoUsers.ae!)}
-                  className="p-2 border border-amber-100 bg-amber-50/20 hover:bg-amber-50 rounded-xl text-left cursor-pointer transition-all"
-                >
-                  <p className="font-bold text-amber-700 text-[10px]">Account Executive</p>
-                  <p className="text-[8px] text-slate-400 mt-0.5">ramadhan / ramadhan123</p>
-                </button>
-              )}
-              {demoUsers.ml && (
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin(demoUsers.ml!)}
-                  className="p-2 border border-emerald-100 bg-emerald-50/20 hover:bg-emerald-50 rounded-xl text-left cursor-pointer transition-all"
-                >
-                  <p className="font-bold text-emerald-700 text-[10px]">Marketing Lapangan</p>
-                  <p className="text-[8px] text-slate-400 mt-0.5">budi / budi123</p>
-                </button>
-              )}
-            </div>
-          </div>
         </div>
       </div>
     </div>
