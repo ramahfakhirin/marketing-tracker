@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Replace Indigo (the dominant brand color) with the custom Electric Royal Blue palette from the screenshot */
+  --color-indigo-50: #edf2ff;
+  --color-indigo-100: #dbe4ff;
+  --color-indigo-200: #bac8ff;
+  --color-indigo-300: #91a7ff;
+  --color-indigo-400: #748ffc;
+  --color-indigo-500: #4c6ef5;
+  --color-indigo-600: #002bf7;
+  --color-indigo-700: #0024cf;
+  --color-indigo-800: #001da8;
+  --color-indigo-900: #001680;
+  --color-indigo-950: #000c47;
+
+  /* Replace Violet to be consistent with the new Electric Royal Blue scheme */
+  --color-violet-50: #edf2ff;
+  --color-violet-100: #dbe4ff;
+  --color-violet-200: #bac8ff;
+  --color-violet-300: #91a7ff;
+  --color-violet-400: #748ffc;
+  --color-violet-500: #4c6ef5;
+  --color-violet-600: #002bf7;
+  --color-violet-700: #0024cf;
+  --color-violet-800: #001da8;
+  --color-violet-900: #001680;
+  --color-violet-950: #000c47;
+
+  /* Replace Purple to keep all "ungu/violet" variants perfectly aligned with the brand */
+  --color-purple-50: #edf2ff;
+  --color-purple-100: #dbe4ff;
+  --color-purple-200: #bac8ff;
+  --color-purple-300: #91a7ff;
+  --color-purple-400: #748ffc;
+  --color-purple-500: #4c6ef5;
+  --color-purple-600: #002bf7;
+  --color-purple-700: #0024cf;
+  --color-purple-800: #001da8;
+  --color-purple-900: #001680;
+  --color-purple-950: #000c47;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f8fafc; /* Warm off-white */
+  color: #1e293b;
+}
+
+/* Hide scrollbars for clean scrollable UI on mobile */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
