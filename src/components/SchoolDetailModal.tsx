@@ -3,7 +3,7 @@ import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember } from '.
 import { SURVEYED_DATABASE } from '../data/surveyedSchools';
 import { 
   X, 
-  Instagram, 
+  Image, 
   Phone, 
   MessageSquare, 
   Save, 
@@ -260,7 +260,7 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                     rel="noopener noreferrer"
                     className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-extrabold uppercase tracking-wider rounded-xl flex items-center space-x-1.5 transition-all shadow-2xs"
                   >
-                    <Instagram className="h-3.5 w-3.5" />
+                    <Image className="h-3.5 w-3.5" />
                     <span>Kirim DM Instagram</span>
                   </a>
                 )}

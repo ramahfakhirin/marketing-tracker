@@ -5,7 +5,7 @@ import {
   Search, 
   Filter, 
   SlidersHorizontal, 
-  Instagram, 
+  Image, 
   Phone, 
   ChevronLeft, 
   ChevronRight, 
@@ -1361,7 +1361,7 @@ export default function SchoolList({
                         rel="noopener noreferrer"
                         className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
                       >
-                        <Instagram className="h-3.5 w-3.5" />
+                        <Image className="h-3.5 w-3.5" />
                         <span>{sch.instagram}</span>
                         <ExternalLink className="h-2.5 w-2.5" />
                       </a>
@@ -1480,7 +1480,7 @@ export default function SchoolList({
                         onClick={(e) => e.stopPropagation()}
                         className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
                       >
-                        <Instagram className="h-3.5 w-3.5" />
+                        <Image className="h-3.5 w-3.5" />
                         <span>{school.instagramHandle}</span>
                         <ExternalLink className="h-2.5 w-2.5" />
                       </a>

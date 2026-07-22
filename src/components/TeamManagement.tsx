@@ -90,7 +90,7 @@ export default function TeamManagement({
   // Calculate stats for each member
   const getAssignedCount = (member: TeamMember) => {
     if (member.role === 'AE') {
-      return schools.filter((s) => s.picMarketing.toLowerCase() === member.name.toLowerCase()).length;
+      return schools.filter((s) => (s.picMarketing || '').toLowerCase() === member.name.toLowerCase()).length;
     } else if (member.role === 'MARKETING_LAPANGAN') {
       return schools.filter((s) => s.marketingLapangan?.toLowerCase() === member.name.toLowerCase()).length;
     }
@@ -380,8 +380,6 @@ export default function TeamManagement({
                           <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-400 font-medium font-mono">
                             <Key className="h-2.5 w-2.5 shrink-0" />
                             <span className="truncate">@{member.username}</span>
-                            <span className="text-[9px] text-slate-300">|</span>
-                            <span>pass: {member.password || 'password123'}</span>
                           </div>
 
                           <div className="flex items-center space-x-1.5 mt-2">

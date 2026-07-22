@@ -29,6 +29,14 @@ import {
 
 const LOCAL_STORAGE_KEY = 'ae_marketing_tracker_schools_v2';
 const TEAM_STORAGE_KEY = 'ae_marketing_tracker_team_v1';
+const TOKEN_STORAGE_KEY = 'ae_marketing_tracker_token_v1';
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
 
 export default function App() {
   const [schools, setSchools] = useState<SchoolRecord[]>([]);
@@ -39,6 +47,7 @@ export default function App() {
 
   // Auth & Session States
   const [currentUser, setCurrentUser] = useState<TeamMember | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [authHydrated, setAuthHydrated] = useState(false);
 
   // Custom surveyed database state for expansion
@@ -122,9 +131,12 @@ export default function App() {
   // Load initial data from Express backend with local storage fallbacks
   useEffect(() => {
     const loadData = async () => {
+      const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+      const authHeaders = savedToken ? { Authorization: `Bearer ${savedToken}` } : {};
+
       // 1. Load custom database
       try {
-        const res = await fetch('/api/custom-db');
+        const res = await fetch('/api/custom-db', { headers: authHeaders });
         if (res.ok) {
           const data = await res.json();
           setCustomDatabase(data);
@@ -132,7 +144,6 @@ export default function App() {
           throw new Error('Not ok');
         }
       } catch (e) {
-        console.warn('Failed to load custom database from server, using local fallback', e);
         const savedCustomDb = localStorage.getItem('ae_custom_surveyed_database_v2');
         if (savedCustomDb) {
           try {
@@ -145,7 +156,7 @@ export default function App() {
 
       // 2. Load schools
       try {
-        const res = await fetch('/api/schools');
+        const res = await fetch('/api/schools', { headers: authHeaders });
         if (res.ok) {
           const data = await res.json();
           setSchools(data);
@@ -153,7 +164,6 @@ export default function App() {
           throw new Error('Not ok');
         }
       } catch (e) {
-        console.warn('Failed to load schools from server, using local fallback', e);
         const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (saved) {
           try {
@@ -173,7 +183,7 @@ export default function App() {
 
       // 3. Load team members
       try {
-        const res = await fetch('/api/team');
+        const res = await fetch('/api/team', { headers: authHeaders });
         if (res.ok) {
           const data = await res.json();
           setTeamMembers(data);
@@ -181,7 +191,6 @@ export default function App() {
           throw new Error('Not ok');
         }
       } catch (e) {
-        console.warn('Failed to load team from server, using local fallback', e);
         const savedTeam = localStorage.getItem(TEAM_STORAGE_KEY);
         if (savedTeam) {
           try {
@@ -199,13 +208,19 @@ export default function App() {
         }
       }
 
-      // 4. Load session
-      const savedUser = localStorage.getItem('ae_marketing_tracker_current_user_v1');
-      if (savedUser) {
+      // 4. Validate existing token and restore session
+      if (savedToken) {
         try {
-          setCurrentUser(JSON.parse(savedUser));
-        } catch (e) {
-          console.error('Failed to parse current user session', e);
+          const jwtPayload = JSON.parse(atob(savedToken.split('.')[1]));
+          const expMs = (jwtPayload.exp || 0) * 1000;
+          if (Date.now() < expMs) {
+            setCurrentUser({ id: jwtPayload.id, name: jwtPayload.name, role: jwtPayload.role, username: jwtPayload.username });
+            setAuthToken(savedToken);
+          } else {
+            localStorage.removeItem(TOKEN_STORAGE_KEY);
+          }
+        } catch {
+          localStorage.removeItem(TOKEN_STORAGE_KEY);
         }
       }
       setAuthHydrated(true);
@@ -222,46 +237,33 @@ export default function App() {
   }, [currentUser, availableTabs, activeTab]);
 
   const handleLogin = async (user: TeamMember) => {
-    try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: user.username, password: user.password })
-      });
-      if (res.ok) {
-        const authenticatedUser = await res.json();
-        setCurrentUser(authenticatedUser);
-        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(authenticatedUser));
-        
-        if (authenticatedUser.role === 'MARKETING_LAPANGAN') {
-          setActiveTab('prospects');
-        } else {
-          setActiveTab('dashboard');
-        }
-        return;
-      } else {
-        const errorData = await res.json();
-        alert(errorData.error || "Gagal login!");
-        return;
-      }
-    } catch (e) {
-      console.warn('Login connection failed, using client fallback', e);
-    }
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user.username, password: user.password })
+    });
 
-    // Client fallback if server is unreachable
-    setCurrentUser(user);
-    localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(user));
-    
-    if (user.role === 'MARKETING_LAPANGAN') {
-      setActiveTab('prospects');
+    if (res.ok) {
+      const data = await res.json();
+      setCurrentUser(data.user);
+      setAuthToken(data.token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
+      
+      if (data.user.role === 'MARKETING_LAPANGAN') {
+        setActiveTab('prospects');
+      } else {
+        setActiveTab('dashboard');
+      }
     } else {
-      setActiveTab('dashboard');
+      const errorData = await res.json();
+      alert(errorData.error || "Gagal login!");
     }
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('ae_marketing_tracker_current_user_v1');
+    setAuthToken(null);
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
   };
 
   // Save to local storage helper
@@ -282,7 +284,7 @@ export default function App() {
     try {
       await fetch('/api/custom-db-bulk', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(newDb)
       });
     } catch (e) {
@@ -303,12 +305,16 @@ export default function App() {
     try {
       const res = await fetch('/api/team', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(newMember)
       });
       if (res.ok) {
         const saved = await res.json();
         setTeamMembers(prev => [...prev.filter(t => t.id !== saved.id), saved]);
+        return;
+      } else {
+        const err = await res.json();
+        alert(err.error || "Gagal menyimpan anggota tim");
         return;
       }
     } catch (e) {
@@ -325,7 +331,7 @@ export default function App() {
     if (!memberToDelete) return;
 
     try {
-      await fetch(`/api/team/${id}`, { method: 'DELETE' });
+      await fetch(`/api/team/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
     } catch (e) {
       console.error('Failed to delete team member on server', e);
     }
@@ -373,7 +379,7 @@ export default function App() {
     try {
       const res = await fetch('/api/schools', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(updatedSchool)
       });
       if (res.ok) {
@@ -405,7 +411,7 @@ export default function App() {
   // Callback to delete a school
   const handleDeleteSchool = async (schoolNo: number) => {
     try {
-      await fetch(`/api/schools/${schoolNo}`, { method: 'DELETE' });
+      await fetch(`/api/schools/${schoolNo}`, { method: 'DELETE', headers: getAuthHeaders() });
     } catch (e) {
       console.warn('Failed to delete school on server, using client fallback', e);
     }
@@ -744,7 +750,7 @@ export default function App() {
             Buka aplikasi ini di browser HP Anda (Chrome untuk Android, Safari untuk iOS). Klik tombol menu browser, lalu pilih <b>"Tambahkan ke Layar Utama" (Add to Home Screen)</b>. Aplikasi akan terinstall secara mandiri dengan akses offline instan!
           </p>
           <p className="text-[10px] text-slate-300 pt-3">
-            © 2026 AE Marketing Progress Tracker. Didukung Penyimpanan Offline Terenkripsi Lokal.
+            © 2026 AE Marketing Progress Tracker. Didukung Penyimpanan Lokal Browser.
           </p>
         </div>
       </footer>

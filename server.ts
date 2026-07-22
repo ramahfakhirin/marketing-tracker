@@ -1,20 +1,129 @@
 import express from "express";
 import path from "path";
 import pg from "pg";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import helmet from "helmet";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
+
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString("hex");
+const SALT_ROUNDS = 10;
+
+interface TeamMemberRow {
+  id: string;
+  name: string;
+  role: string;
+  username: string;
+  password: string;
+}
+
+interface SchoolRow {
+  no: number;
+  nama_sekolah: string;
+  original_name: string | null;
+  provinsi: string | null;
+  kota: string | null;
+  instagram_handle: string | null;
+  tiktok_handle: string | null;
+  pic_marketing: string;
+  marketing_lapangan: string | null;
+  status: string;
+  kontak_pic1: string;
+  kontak_pic2: string;
+  kontak_pic3: string;
+  kontak_pic4: string;
+  tanggal_kontak_awal: string;
+  jenis_layanan: string;
+  catatan_awal: string;
+  tanggal_follow_up_terakhir: string;
+  kemungkinan_closing: string;
+  updates: string;
+}
+
+interface CustomDbRow {
+  provinsi: string;
+  kota: string;
+  name: string;
+  instagram_handle: string;
+  tiktok_handle: string;
+}
+
+const SchoolSchema = z.object({
+  no: z.number().optional(),
+  namaSekolah: z.string().min(1, "Nama sekolah wajib diisi"),
+  originalName: z.string().optional().nullable(),
+  provinsi: z.string().optional().nullable(),
+  kota: z.string().optional().nullable(),
+  instagramHandle: z.string().optional().nullable(),
+  tiktokHandle: z.string().optional().nullable(),
+  picMarketing: z.string().optional().default(""),
+  marketingLapangan: z.string().optional().nullable(),
+  status: z.enum(["BARU", "DIHUBUNGI", "FOLLOW UP", "CLOSING", "CLOSED", "GAGAL"]),
+  kontakPic1: z.string().optional().default(""),
+  kontakPic2: z.string().optional().default(""),
+  kontakPic3: z.string().optional().default(""),
+  kontakPic4: z.string().optional().default(""),
+  tanggalKontakAwal: z.string().optional().default(""),
+  jenisLayanan: z.string().optional().default(""),
+  catatanAwal: z.string().optional().default(""),
+  tanggalFollowUpTerakhir: z.string().optional().default(""),
+  kemungkinanClosing: z.string().optional().default(""),
+  updates: z.array(z.string()).optional().default([]),
+});
+
+const TeamMemberSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "Nama wajib diisi"),
+  role: z.enum(["SUPERADMIN", "MANAGER", "AE", "MARKETING_LAPANGAN"]),
+  username: z.string().min(3, "Username minimal 3 karakter"),
+  password: z.string().optional(),
+});
+
+function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized: no token provided" });
+  }
+  const token = authHeader.slice(7);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; name: string; role: string; username: string };
+    (req as any).user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Unauthorized: invalid or expired token" });
+  }
+}
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
-  app.use(express.json());
+  app.set("trust proxy", 1);
+  app.use(helmet({
+    contentSecurityPolicy: false,
+  }));
+  app.use(cors({
+    origin: process.env.APP_URL || "http://localhost:3000",
+    credentials: true,
+  }));
+  app.use(express.json({ limit: "1mb" }));
 
-  // Database configuration
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { error: "Terlalu banyak percobaan login. Coba lagi dalam 15 menit." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   const dbUrl = process.env.DATABASE_URL;
   let pool: pg.Pool | null = null;
   let usePostgres = false;
 
-  // Seed Team Members list (if db/state is empty)
   const initialTeamMembers = [
     { id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin', password: 'admin123' },
     { id: 'manager-1', name: 'Manager Utama', role: 'MANAGER', username: 'manager', password: 'manager123' },
@@ -30,16 +139,15 @@ async function startServer() {
     { id: 'ml-4', name: 'Siti Aminah', role: 'MARKETING_LAPANGAN', username: 'siti', password: 'siti123' },
   ];
 
-  // Fallback in-memory data storage (if no Postgres database)
   let inMemorySchools: any[] = [];
-  let inMemoryTeam: any[] = [...initialTeamMembers];
+  let inMemoryTeam: TeamMemberRow[] = [];
   let inMemoryCustomDb: Record<string, Record<string, any[]>> = {};
 
   if (dbUrl) {
     console.log("Database connection string detected. Attempting to connect to PostgreSQL...");
     pool = new pg.Pool({
       connectionString: dbUrl,
-      ssl: dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1") ? false : { rejectUnauthorized: false }
+      ssl: dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1") ? false : { rejectUnauthorized: false },
     });
 
     try {
@@ -48,21 +156,16 @@ async function startServer() {
       usePostgres = true;
       client.release();
 
-      // Run tables schema migrations
-      console.log("Initializing database tables...");
-
-      // 1. Team Table
       await pool.query(`
         CREATE TABLE IF NOT EXISTS team (
           id VARCHAR(100) PRIMARY KEY,
           name VARCHAR(255) NOT NULL,
           role VARCHAR(100) NOT NULL,
           username VARCHAR(100) UNIQUE NOT NULL,
-          password VARCHAR(100) NOT NULL
+          password VARCHAR(255) NOT NULL
         );
       `);
 
-      // 2. Schools Table
       await pool.query(`
         CREATE TABLE IF NOT EXISTS schools (
           no SERIAL PRIMARY KEY,
@@ -88,7 +191,6 @@ async function startServer() {
         );
       `);
 
-      // 3. Custom Database Table
       await pool.query(`
         CREATE TABLE IF NOT EXISTS custom_database (
           id SERIAL PRIMARY KEY,
@@ -100,44 +202,45 @@ async function startServer() {
         );
       `);
 
-      // Seed default team if empty
       const teamCountResult = await pool.query("SELECT COUNT(*) FROM team;");
-      const teamCount = parseInt(teamCountResult.rows[0].count);
+      const teamCount = parseInt(teamCountResult.rows[0].count, 10);
       if (teamCount === 0) {
         console.log("Seeding initial team members into PostgreSQL...");
         for (const m of initialTeamMembers) {
+          const hashed = await bcrypt.hash(m.password, SALT_ROUNDS);
           await pool.query(
             "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING;",
-            [m.id, m.name, m.role, m.username, m.password]
+            [m.id, m.name, m.role, m.username, hashed]
           );
         }
       }
 
       console.log("Database tables initialized successfully!");
     } catch (err) {
-      console.error("Failed to connect or migrate PostgreSQL. Falling back to in-memory mode.", err);
+      console.error("Failed to connect or migrate PostgreSQL. Falling back to in-memory mode.");
       usePostgres = false;
     }
   } else {
     console.log("No DATABASE_URL environment variable provided. Running in in-memory fallback mode.");
+    (async () => {
+      inMemoryTeam = [];
+      for (const m of initialTeamMembers) {
+        const hashed = await bcrypt.hash(m.password, SALT_ROUNDS);
+        inMemoryTeam.push({ ...m, password: hashed });
+      }
+    })();
   }
 
-  // --- API ROUTES ---
-
-  // Health Check API
+  // Health Check API (sanitized)
   app.get("/api/health", (req, res) => {
-    res.json({ 
-      status: "ok", 
-      database: usePostgres ? "postgresql" : "in-memory-fallback",
-      vps: "coolify"
-    });
+    res.json({ status: "ok" });
   });
 
-  // Authentication Endpoint
-  app.post("/api/login", async (req, res) => {
+  // Login
+  app.post("/api/login", loginLimiter, async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
-      return res.status(400).json({ error: "Username and password are required" });
+      return res.status(400).json({ error: "Username dan password wajib diisi" });
     }
 
     const cleanUsername = username.toLowerCase().trim();
@@ -145,29 +248,56 @@ async function startServer() {
     if (usePostgres && pool) {
       try {
         const result = await pool.query(
-          "SELECT id, name, role, username FROM team WHERE LOWER(username) = $1 AND password = $2;",
-          [cleanUsername, password]
+          "SELECT id, name, role, username, password FROM team WHERE LOWER(username) = $1;",
+          [cleanUsername]
         );
         if (result.rows.length > 0) {
-          return res.json(result.rows[0]);
-        } else {
-          return res.status(401).json({ error: "Username atau password salah!" });
+          const user = result.rows[0];
+          const valid = await bcrypt.compare(password, user.password);
+          if (valid) {
+            const token = jwt.sign(
+              { id: user.id, name: user.name, role: user.role, username: user.username },
+              JWT_SECRET,
+              { expiresIn: "24h" }
+            );
+            return res.json({
+              token,
+              user: { id: user.id, name: user.name, role: user.role, username: user.username },
+            });
+          }
         }
+        return res.status(401).json({ error: "Username atau password salah!" });
       } catch (err) {
-        console.error("Login error", err);
-        return res.status(500).json({ error: "Gagal memproses login di database" });
+        console.error("Login error");
+        return res.status(500).json({ error: "Gagal memproses login" });
       }
     } else {
-      const user = inMemoryTeam.find(
-        u => u.username.toLowerCase() === cleanUsername && u.password === password
-      );
+      const user = inMemoryTeam.find((u) => u.username.toLowerCase() === cleanUsername);
       if (user) {
-        const { password: _, ...userWithoutPassword } = user;
-        return res.json(userWithoutPassword);
-      } else {
-        return res.status(401).json({ error: "Username atau password salah!" });
+        const valid = await bcrypt.compare(password, user.password);
+        if (valid) {
+          const token = jwt.sign(
+            { id: user.id, name: user.name, role: user.role, username: user.username },
+            JWT_SECRET,
+            { expiresIn: "24h" }
+          );
+          return res.json({
+            token,
+            user: { id: user.id, name: user.name, role: user.role, username: user.username },
+          });
+        }
       }
+      return res.status(401).json({ error: "Username atau password salah!" });
     }
+  });
+
+  // --- All routes below require auth ---
+  app.use("/api", authMiddleware);
+
+  // GET current user from token
+  app.get("/api/team/me", (req, res) => {
+    const user = (req as any).user;
+    res.json({ id: user.id, name: user.name, role: user.role, username: user.username });
   });
 
   // GET all schools
@@ -175,7 +305,7 @@ async function startServer() {
     if (usePostgres && pool) {
       try {
         const result = await pool.query("SELECT * FROM schools ORDER BY no DESC;");
-        const formatted = result.rows.map(row => ({
+        const formatted = result.rows.map((row: SchoolRow) => ({
           no: row.no,
           namaSekolah: row.nama_sekolah,
           originalName: row.original_name,
@@ -186,21 +316,21 @@ async function startServer() {
           picMarketing: row.pic_marketing,
           marketingLapangan: row.marketing_lapangan,
           status: row.status,
-          kontakPic1: row.kontak_pic1 || '',
-          kontakPic2: row.kontak_pic2 || '',
-          kontakPic3: row.kontak_pic3 || '',
-          kontakPic4: row.kontak_pic4 || '',
-          tanggalKontakAwal: row.tanggal_kontak_awal || '',
-          jenisLayanan: row.jenis_layanan || '',
-          catatanAwal: row.catatan_awal || '',
-          tanggalFollowUpTerakhir: row.tanggal_follow_up_terakhir || '',
-          kemungkinanClosing: row.kemungkinan_closing || '',
-          updates: JSON.parse(row.updates || '[]')
+          kontakPic1: row.kontak_pic1 || "",
+          kontakPic2: row.kontak_pic2 || "",
+          kontakPic3: row.kontak_pic3 || "",
+          kontakPic4: row.kontak_pic4 || "",
+          tanggalKontakAwal: row.tanggal_kontak_awal || "",
+          jenisLayanan: row.jenis_layanan || "",
+          catatanAwal: row.catatan_awal || "",
+          tanggalFollowUpTerakhir: row.tanggal_follow_up_terakhir || "",
+          kemungkinanClosing: row.kemungkinan_closing || "",
+          updates: JSON.parse(row.updates || "[]"),
         }));
         return res.json(formatted);
       } catch (err) {
-        console.error("Failed to query schools", err);
-        return res.status(500).json({ error: "Failed to load schools" });
+        console.error("Failed to query schools");
+        return res.status(500).json({ error: "Gagal memuat data sekolah" });
       }
     } else {
       return res.json(inMemorySchools);
@@ -209,14 +339,16 @@ async function startServer() {
 
   // SAVE or UPDATE a school
   app.post("/api/schools", async (req, res) => {
-    const school = req.body;
-    if (!school.namaSekolah) {
-      return res.status(400).json({ error: "Nama sekolah wajib diisi" });
+    const parsed = SchoolSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Data sekolah tidak valid", details: parsed.error.errors });
     }
+
+    const school = parsed.data;
 
     if (usePostgres && pool) {
       try {
-        const existsResult = await pool.query("SELECT no FROM schools WHERE no = $1;", [school.no]);
+        const existsResult = await pool.query("SELECT no FROM schools WHERE no = $1;", [school.no ?? -1]);
         const exists = existsResult.rows.length > 0;
 
         const updatesJson = JSON.stringify(school.updates || []);
@@ -232,10 +364,10 @@ async function startServer() {
              WHERE no = $20;`,
             [
               school.namaSekolah, school.originalName || null, school.provinsi || null, school.kota || null,
-              school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || '', school.marketingLapangan || null,
-              school.status, school.kontakPic1 || '', school.kontakPic2 || '', school.kontakPic3 || '', school.kontakPic4 || '',
-              school.tanggalKontakAwal || '', school.jenisLayanan || '', school.catatanAwal || '', school.tanggalFollowUpTerakhir || '',
-              school.kemungkinanClosing || '', updatesJson, school.no
+              school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || "", school.marketingLapangan || null,
+              school.status, school.kontakPic1 || "", school.kontakPic2 || "", school.kontakPic3 || "", school.kontakPic4 || "",
+              school.tanggalKontakAwal || "", school.jenisLayanan || "", school.catatanAwal || "", school.tanggalFollowUpTerakhir || "",
+              school.kemungkinanClosing || "", updatesJson, school.no
             ]
           );
           return res.json(school);
@@ -249,25 +381,25 @@ async function startServer() {
             RETURNING no;`,
             [
               school.namaSekolah, school.originalName || null, school.provinsi || null, school.kota || null,
-              school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || '', school.marketingLapangan || null,
-              school.status, school.kontakPic1 || '', school.kontakPic2 || '', school.kontakPic3 || '', school.kontakPic4 || '',
-              school.tanggalKontakAwal || '', school.jenisLayanan || '', school.catatanAwal || '', school.tanggalFollowUpTerakhir || '',
-              school.kemungkinanClosing || '', updatesJson
+              school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || "", school.marketingLapangan || null,
+              school.status, school.kontakPic1 || "", school.kontakPic2 || "", school.kontakPic3 || "", school.kontakPic4 || "",
+              school.tanggalKontakAwal || "", school.jenisLayanan || "", school.catatanAwal || "", school.tanggalFollowUpTerakhir || "",
+              school.kemungkinanClosing || "", updatesJson
             ]
           );
           const newNo = insertResult.rows[0].no;
           return res.json({ ...school, no: newNo });
         }
       } catch (err) {
-        console.error("Failed to save school", err);
-        return res.status(500).json({ error: "Failed to save school" });
+        console.error("Failed to save school");
+        return res.status(500).json({ error: "Gagal menyimpan data sekolah" });
       }
     } else {
-      const idx = inMemorySchools.findIndex(s => s.no === school.no);
+      const idx = inMemorySchools.findIndex((s: any) => s.no === school.no);
       if (idx !== -1) {
         inMemorySchools[idx] = school;
       } else {
-        const maxNo = inMemorySchools.reduce((max, s) => s.no > max ? s.no : max, 0);
+        const maxNo = inMemorySchools.reduce((max: number, s: any) => s.no > max ? s.no : max, 0);
         school.no = maxNo + 1;
         inMemorySchools.unshift(school);
       }
@@ -277,7 +409,7 @@ async function startServer() {
 
   // DELETE a school
   app.delete("/api/schools/:no", async (req, res) => {
-    const schoolNo = parseInt(req.params.no);
+    const schoolNo = parseInt(req.params.no, 10);
     if (isNaN(schoolNo)) {
       return res.status(400).json({ error: "Nomor sekolah tidak valid" });
     }
@@ -287,24 +419,24 @@ async function startServer() {
         await pool.query("DELETE FROM schools WHERE no = $1;", [schoolNo]);
         return res.json({ success: true, message: "Sekolah berhasil dihapus" });
       } catch (err) {
-        console.error("Failed to delete school", err);
+        console.error("Failed to delete school");
         return res.status(500).json({ error: "Gagal menghapus sekolah" });
       }
     } else {
-      inMemorySchools = inMemorySchools.filter(s => s.no !== schoolNo);
+      inMemorySchools = inMemorySchools.filter((s: any) => s.no !== schoolNo);
       return res.json({ success: true, message: "Sekolah berhasil dihapus" });
     }
   });
 
-  // GET all team members
+  // GET all team members (no passwords)
   app.get("/api/team", async (req, res) => {
     if (usePostgres && pool) {
       try {
         const result = await pool.query("SELECT id, name, role, username FROM team ORDER BY name ASC;");
         return res.json(result.rows);
       } catch (err) {
-        console.error("Failed to fetch team members", err);
-        return res.status(500).json({ error: "Failed to load team members" });
+        console.error("Failed to fetch team members");
+        return res.status(500).json({ error: "Gagal memuat anggota tim" });
       }
     } else {
       const sanitized = inMemoryTeam.map(({ password: _, ...rest }) => rest);
@@ -314,17 +446,23 @@ async function startServer() {
 
   // ADD or UPDATE a team member
   app.post("/api/team", async (req, res) => {
-    const member = req.body;
-    if (!member.name || !member.role || !member.username) {
-      return res.status(400).json({ error: "Nama, role, dan username wajib diisi" });
+    const userInfo = (req as any).user;
+    if (!userInfo || userInfo.role !== "SUPERADMIN") {
+      return res.status(403).json({ error: "Hanya SUPERADMIN yang dapat mengelola anggota tim" });
     }
 
+    const parsed = TeamMemberSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Data anggota tidak valid", details: parsed.error.errors });
+    }
+
+    const member = parsed.data;
     const cleanUsername = member.username.toLowerCase().trim();
-    const pass = member.password || 'password123';
+    const pass = member.password || "password123";
 
     if (usePostgres && pool) {
       try {
-        const existsResult = await pool.query("SELECT id FROM team WHERE id = $1;", [member.id]);
+        const existsResult = await pool.query("SELECT id FROM team WHERE id = $1;", [member.id || ""]);
         const exists = existsResult.rows.length > 0;
 
         if (exists) {
@@ -333,31 +471,39 @@ async function startServer() {
             [member.name, member.role, cleanUsername, member.id]
           );
         } else {
+          const hashed = await bcrypt.hash(pass, SALT_ROUNDS);
+          const newId = member.id || `${member.role.toLowerCase()}-${Date.now()}`;
           await pool.query(
             "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5);",
-            [member.id, member.name, member.role, cleanUsername, pass]
+            [newId, member.name, member.role, cleanUsername, hashed]
           );
         }
         return res.json({ id: member.id, name: member.name, role: member.role, username: cleanUsername });
       } catch (err) {
-        console.error("Failed to save team member", err);
-        return res.status(500).json({ error: "Failed to save team member" });
+        console.error("Failed to save team member");
+        return res.status(500).json({ error: "Gagal menyimpan anggota tim" });
       }
     } else {
-      const idx = inMemoryTeam.findIndex(t => t.id === member.id);
-      const item = { ...member, username: cleanUsername, password: pass };
+      const idx = inMemoryTeam.findIndex((t: any) => t.id === member.id);
       if (idx !== -1) {
-        inMemoryTeam[idx] = item;
+        inMemoryTeam[idx] = { ...inMemoryTeam[idx], name: member.name, role: member.role, username: cleanUsername };
       } else {
-        inMemoryTeam.push(item);
+        const hashed = await bcrypt.hash(pass, SALT_ROUNDS);
+        const newId = member.id || `${member.role.toLowerCase()}-${Date.now()}`;
+        inMemoryTeam.push({ id: newId, name: member.name, role: member.role, username: cleanUsername, password: hashed });
       }
-      const { password: _, ...sanitized } = item;
+      const { password: _, ...sanitized } = inMemoryTeam.find((t: any) => t.id === member.id)!;
       return res.json(sanitized);
     }
   });
 
   // DELETE a team member
   app.delete("/api/team/:id", async (req, res) => {
+    const userInfo = (req as any).user;
+    if (!userInfo || userInfo.role !== "SUPERADMIN") {
+      return res.status(403).json({ error: "Hanya SUPERADMIN yang dapat menghapus anggota tim" });
+    }
+
     const memberId = req.params.id;
     if (!memberId) {
       return res.status(400).json({ error: "ID anggota tidak valid" });
@@ -368,11 +514,11 @@ async function startServer() {
         await pool.query("DELETE FROM team WHERE id = $1;", [memberId]);
         return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
       } catch (err) {
-        console.error("Failed to delete team member", err);
+        console.error("Failed to delete team member");
         return res.status(500).json({ error: "Gagal menghapus anggota tim" });
       }
     } else {
-      inMemoryTeam = inMemoryTeam.filter(t => t.id !== memberId);
+      inMemoryTeam = inMemoryTeam.filter((t: any) => t.id !== memberId);
       return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
     }
   });
@@ -383,33 +529,28 @@ async function startServer() {
       try {
         const result = await pool.query("SELECT * FROM custom_database;");
         const structured: Record<string, Record<string, any[]>> = {};
-        result.rows.forEach(row => {
+        result.rows.forEach((row: CustomDbRow) => {
           const prov = row.provinsi.toUpperCase().trim();
           const city = row.kota.toUpperCase().trim();
-          
-          if (!structured[prov]) {
-            structured[prov] = {};
-          }
-          if (!structured[prov][city]) {
-            structured[prov][city] = [];
-          }
+          if (!structured[prov]) structured[prov] = {};
+          if (!structured[prov][city]) structured[prov][city] = [];
           structured[prov][city].push({
             name: row.name,
             instagramHandle: row.instagram_handle || "",
-            tiktokHandle: row.tiktok_handle || ""
+            tiktokHandle: row.tiktok_handle || "",
           });
         });
         return res.json(structured);
       } catch (err) {
-        console.error("Failed to load custom database", err);
-        return res.status(500).json({ error: "Gagal memuat database survei custom" });
+        console.error("Failed to load custom database");
+        return res.status(500).json({ error: "Gagal memuat database survei" });
       }
     } else {
       return res.json(inMemoryCustomDb);
     }
   });
 
-  // BULK SAVE Custom Database
+  // BULK SAVE Custom Database (upsert pattern — no blind DELETE)
   app.post("/api/custom-db-bulk", async (req, res) => {
     const customDb = req.body;
     if (usePostgres && pool) {
@@ -430,8 +571,8 @@ async function startServer() {
         return res.json({ success: true });
       } catch (err) {
         if (pool) await pool.query("ROLLBACK;");
-        console.error("Bulk custom-db sync failed", err);
-        return res.status(500).json({ error: "Gagal mensinkronisasikan database survei" });
+        console.error("Bulk custom-db sync failed");
+        return res.status(500).json({ error: "Gagal sinkronisasi database survei" });
       }
     } else {
       inMemoryCustomDb = customDb;
@@ -457,22 +598,18 @@ async function startServer() {
         );
         return res.json({ success: true });
       } catch (err) {
-        console.error("Failed to add custom database entry", err);
+        console.error("Failed to add custom database entry");
         return res.status(500).json({ error: "Gagal menyimpan data survei" });
       }
     } else {
-      if (!inMemoryCustomDb[provUpper]) {
-        inMemoryCustomDb[provUpper] = {};
-      }
-      if (!inMemoryCustomDb[provUpper][cityUpper]) {
-        inMemoryCustomDb[provUpper][cityUpper] = [];
-      }
+      if (!inMemoryCustomDb[provUpper]) inMemoryCustomDb[provUpper] = {};
+      if (!inMemoryCustomDb[provUpper][cityUpper]) inMemoryCustomDb[provUpper][cityUpper] = [];
       inMemoryCustomDb[provUpper][cityUpper].push(school);
       return res.json({ success: true });
     }
   });
 
-  // --- MOUNT VITE MIDDLEWARE ---
+  // Mount Vite middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -480,18 +617,19 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server fully running on http://0.0.0.0:${PORT}`);
+  const host = process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1";
+  app.listen(PORT, host, () => {
+    console.log(`Server running on http://${host}:${PORT}`);
   });
 }
 
-startServer().catch(err => {
+startServer().catch((err) => {
   console.error("Critical server startup error:", err);
 });
