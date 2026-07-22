@@ -98,7 +98,14 @@ export default function SchoolDetailModal({
       setTiktokHandle(school.tiktokHandle || '');
       setPicMarketing(school.picMarketing || '');
       setMarketingLapangan(school.marketingLapangan || '');
-      setStatus(school.status || 'BARU');
+      let initialStatus: MarketingStatus = 'BARU';
+      if (school.status) {
+        if ((school.status as string) === 'CLOSED') initialStatus = 'DEAL';
+        else if ((school.status as string) === 'CLOSING') initialStatus = 'PROSPEK';
+        else if ((school.status as string) === 'GAGAL') initialStatus = 'LOST';
+        else initialStatus = school.status;
+      }
+      setStatus(initialStatus);
       setKontakPic1(school.kontakPic1 || '');
       setKontakPic2(school.kontakPic2 || '');
       setKontakPic3(school.kontakPic3 || '');
@@ -496,9 +503,10 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                     <option value="BARU">BARU</option>
                     <option value="DIHUBUNGI">DIHUBUNGI</option>
                     <option value="FOLLOW UP">FOLLOW UP</option>
-                    <option value="CLOSING">CLOSING</option>
-                    <option value="CLOSED">CLOSED (SUCCESS)</option>
-                    <option value="GAGAL">GAGAL</option>
+                    <option value="PROSPEK">PROSPEK</option>
+                    <option value="MEETING / VISIT">MEETING / VISIT</option>
+                    <option value="DEAL">DEAL</option>
+                    <option value="LOST">LOST</option>
                   </select>
                 </div>
 
