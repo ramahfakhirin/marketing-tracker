@@ -419,7 +419,12 @@ export default function App() {
   // Callback from dashboard to filter status
   const handleDashboardFilterStatus = (status: MarketingStatus) => {
     setSelectedStatusFilter(status);
-    setActiveTab('prospects');
+    const isProspectStage = ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(status);
+    if (isProspectStage) {
+      setActiveTab('prospects');
+    } else {
+      setActiveTab('database');
+    }
   };
 
   // Callback from dashboard to filter PIC
@@ -436,8 +441,9 @@ export default function App() {
 
   // Calculate quick top counters
   const totalSchoolsCount = schools.length;
+  const prospectSchoolsCount = schools.filter(s => ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(s.status)).length;
   const contactedSchoolsCount = schools.filter(s => s.status !== 'BARU').length;
-  const closedSuccessCount = schools.filter(s => s.status === 'CLOSED').length;
+  const closedSuccessCount = schools.filter(s => s.status === 'DEAL' || (s.status as string) === 'CLOSED').length;
 
   if (!authHydrated) {
     return (
@@ -586,7 +592,7 @@ export default function App() {
                 <School className="h-3.5 w-3.5" />
                 <span>Daftar Prospek Sekolah</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${activeTab === 'prospects' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-200 text-slate-600'}`}>
-                  {totalSchoolsCount}
+                  {prospectSchoolsCount}
                 </span>
               </button>
             )}
@@ -803,9 +809,9 @@ export default function App() {
           >
             <div className="relative">
               <School className="h-5 w-5" />
-              {totalSchoolsCount > 0 && (
+              {prospectSchoolsCount > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-indigo-600 text-white text-[8px] font-black px-1 py-0.2 rounded-full leading-none min-w-[12px] text-center scale-90">
-                  {totalSchoolsCount}
+                  {prospectSchoolsCount}
                 </span>
               )}
             </div>

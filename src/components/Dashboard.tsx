@@ -39,9 +39,10 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
     let baru = 0;
     let dihubungi = 0;
     let followUp = 0;
-    let closing = 0;
-    let closed = 0;
-    let gagal = 0;
+    let prospek = 0;
+    let meetingVisit = 0;
+    let deal = 0;
+    let lost = 0;
 
     const picCounts: Record<string, number> = {};
     const probabilityCounts = {
@@ -56,9 +57,10 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
       if (s.status === 'BARU') baru++;
       else if (s.status === 'DIHUBUNGI') dihubungi++;
       else if (s.status === 'FOLLOW UP') followUp++;
-      else if (s.status === 'CLOSING') closing++;
-      else if (s.status === 'CLOSED') closed++;
-      else if (s.status === 'GAGAL') gagal++;
+      else if (s.status === 'PROSPEK' || (s.status as string) === 'CLOSING') prospek++;
+      else if (s.status === 'MEETING / VISIT') meetingVisit++;
+      else if (s.status === 'DEAL' || (s.status as string) === 'CLOSED') deal++;
+      else if (s.status === 'LOST' || (s.status as string) === 'GAGAL') lost++;
 
       // PIC
       if (s.picMarketing) {
@@ -74,16 +76,17 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
       else probabilityCounts.UNASSIGNED++;
     });
 
-    const activeMarketingCount = schools.filter(s => s.status !== 'BARU' && s.status !== 'GAGAL').length;
+    const activeMarketingCount = schools.filter(s => s.status !== 'BARU' && s.status !== 'LOST' && (s.status as string) !== 'GAGAL').length;
 
     return {
       total,
       baru,
       dihubungi,
       followUp,
-      closing,
-      closed,
-      gagal,
+      prospek,
+      meetingVisit,
+      deal,
+      lost,
       activeMarketingCount,
       picCounts,
       probabilityCounts,
@@ -109,7 +112,7 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
 
   // Funnel calculations
   const totalInteracted = stats.total - stats.baru;
-  const conversionRate = stats.total > 0 ? ((stats.closed / stats.total) * 100).toFixed(1) : '0';
+  const conversionRate = stats.total > 0 ? ((stats.deal / stats.total) * 100).toFixed(1) : '0';
   const interactionRate = stats.total > 0 ? ((totalInteracted / stats.total) * 100).toFixed(1) : '0';
 
   const statusCards = [
@@ -135,24 +138,31 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
       description: 'Sedang ditindaklanjuti'
     },
     { 
-      title: 'CLOSING STAGE', 
-      count: stats.closing, 
-      color: 'border-purple-400 text-purple-700 bg-purple-50', 
-      tag: 'CLOSING',
-      description: 'Negosiasi akhir'
+      title: 'PROSPEK', 
+      count: stats.prospek, 
+      color: 'border-indigo-400 text-indigo-700 bg-indigo-50', 
+      tag: 'PROSPEK',
+      description: 'Potensi prospek'
     },
     { 
-      title: 'DEAL CLOSED', 
-      count: stats.closed, 
+      title: 'MEETING / VISIT', 
+      count: stats.meetingVisit, 
+      color: 'border-purple-400 text-purple-700 bg-purple-50', 
+      tag: 'MEETING / VISIT',
+      description: 'Pertemuan/Kunjungan'
+    },
+    { 
+      title: 'DEAL', 
+      count: stats.deal, 
       color: 'border-emerald-400 text-emerald-700 bg-emerald-50', 
-      tag: 'CLOSED',
+      tag: 'DEAL',
       description: 'Sukses closing!'
     },
     { 
-      title: 'GAGAL', 
-      count: stats.gagal, 
+      title: 'LOST', 
+      count: stats.lost, 
       color: 'border-rose-400 text-rose-700 bg-rose-50', 
-      tag: 'GAGAL',
+      tag: 'LOST',
       description: 'Ditolak/Batal'
     },
   ];
@@ -230,22 +240,23 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
         <h3 className="font-bold text-slate-900 mb-5 text-sm uppercase tracking-wider flex items-center">
           <Sparkles className="h-4.5 w-4.5 text-indigo-500 mr-2" /> Pipeline Status & Progress Marketing
         </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {statusCards.map((card) => (
             <button
               key={card.title}
-              id={`funnel-card-${card.title.toLowerCase().replace(' ', '-')}`}
+              id={`funnel-card-${card.title.toLowerCase().replace(/[\s\/]+/g, '-')}`}
               onClick={() => onFilterStatus(card.tag as MarketingStatus)}
-              className="p-3.5 sm:p-4 rounded-xl border border-slate-200 bg-white text-left transition-all hover:border-indigo-300 hover:shadow-md cursor-pointer group flex flex-col justify-between min-h-[100px] sm:min-h-[110px]"
+              className="p-3 sm:p-4 rounded-xl border border-slate-200 bg-white text-left transition-all hover:border-indigo-300 hover:shadow-md cursor-pointer group flex flex-col justify-between min-h-[100px] sm:min-h-[110px]"
             >
               <div className="flex justify-between items-start">
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">{card.title}</span>
                 <span className={`w-2 h-2 rounded-full ${
-                  card.tag === 'CLOSED' ? 'bg-emerald-500' :
-                  card.tag === 'CLOSING' ? 'bg-purple-500' :
+                  card.tag === 'DEAL' || card.tag === 'CLOSED' ? 'bg-emerald-500' :
+                  card.tag === 'MEETING / VISIT' ? 'bg-purple-500' :
+                  card.tag === 'PROSPEK' || card.tag === 'CLOSING' ? 'bg-indigo-500' :
                   card.tag === 'FOLLOW UP' ? 'bg-amber-500' :
                   card.tag === 'DIHUBUNGI' ? 'bg-blue-500' :
-                  card.tag === 'GAGAL' ? 'bg-rose-500' : 'bg-slate-400'
+                  card.tag === 'LOST' || card.tag === 'GAGAL' ? 'bg-rose-500' : 'bg-slate-400'
                 }`} />
               </div>
               <div className="mt-2">
@@ -358,10 +369,12 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
                     <div className="relative flex space-x-3.5">
                       <div>
                         <span className={`h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-white shadow-2xs ${
-                          update.status === 'CLOSED' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
+                          update.status === 'DEAL' || update.status === 'CLOSED' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
+                          update.status === 'MEETING / VISIT' ? 'bg-purple-50 text-purple-600 border border-purple-100' :
+                          update.status === 'PROSPEK' || update.status === 'CLOSING' ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' :
                           update.status === 'FOLLOW UP' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
                           update.status === 'DIHUBUNGI' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
-                          update.status === 'CLOSING' ? 'bg-purple-50 text-purple-600 border border-purple-100' :
+                          update.status === 'LOST' || update.status === 'GAGAL' ? 'bg-rose-50 text-rose-600 border border-rose-100' :
                           'bg-slate-50 text-slate-600 border border-slate-200'
                         }`}>
                           <CheckCircle2 className="h-4.5 w-4.5" />

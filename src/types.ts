@@ -1,4 +1,4 @@
-export type MarketingStatus = 'BARU' | 'DIHUBUNGI' | 'FOLLOW UP' | 'CLOSING' | 'CLOSED' | 'GAGAL';
+export type MarketingStatus = 'BARU' | 'DIHUBUNGI' | 'FOLLOW UP' | 'PROSPEK' | 'MEETING / VISIT' | 'DEAL' | 'LOST';
 export type ClosingProbability = 'LOW' | 'MEDIUM' | 'HIGH' | '';
 
 export type UserRole = 'SUPERADMIN' | 'MANAGER' | 'AE' | 'MARKETING_LAPANGAN';

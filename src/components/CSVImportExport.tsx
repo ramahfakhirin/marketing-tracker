@@ -227,8 +227,16 @@ export default function CSVImportExport({ schools, onImport, onReset }: CSVImpor
           // Extract status cleanly
           let statusVal: MarketingStatus = 'BARU';
           const rowStatus = (row[idxStatus] || '').trim().toUpperCase();
-          if (['BARU', 'DIHUBUNGI', 'FOLLOW UP', 'CLOSING', 'CLOSED', 'GAGAL'].includes(rowStatus)) {
+          if (['BARU', 'DIHUBUNGI', 'FOLLOW UP', 'PROSPEK', 'MEETING / VISIT', 'DEAL', 'LOST'].includes(rowStatus)) {
             statusVal = rowStatus as MarketingStatus;
+          } else if (rowStatus === 'MEETING/VISIT') {
+            statusVal = 'MEETING / VISIT';
+          } else if (rowStatus === 'CLOSED' || rowStatus === 'CLOSED (SUCCESS)') {
+            statusVal = 'DEAL';
+          } else if (rowStatus === 'CLOSING') {
+            statusVal = 'PROSPEK';
+          } else if (rowStatus === 'GAGAL') {
+            statusVal = 'LOST';
           }
 
           // Extract closing chance

@@ -294,7 +294,7 @@ export default function SchoolList({
   };
 
   // Helper styles for badges
-  const getStatusBadgeStyle = (status: MarketingStatus) => {
+  const getStatusBadgeStyle = (status: MarketingStatus | string) => {
     switch (status) {
       case 'BARU':
         return 'bg-slate-100 text-slate-700 border-slate-200';
@@ -302,10 +302,15 @@ export default function SchoolList({
         return 'bg-blue-50 text-blue-700 border-blue-200';
       case 'FOLLOW UP':
         return 'bg-amber-50 text-amber-700 border-amber-200';
+      case 'PROSPEK':
       case 'CLOSING':
+        return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+      case 'MEETING / VISIT':
         return 'bg-purple-50 text-purple-700 border-purple-200';
+      case 'DEAL':
       case 'CLOSED':
         return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      case 'LOST':
       case 'GAGAL':
         return 'bg-rose-50 text-rose-700 border-rose-200';
       default:
@@ -430,9 +435,16 @@ export default function SchoolList({
         }
       }
 
+      // 3. Status Filter (For Database mode)
+      if (selectedStatusFilter) {
+        if (!item.active || item.active.status !== selectedStatusFilter) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [schools, selectedProvince, selectedCity, search, levelFilter, mergedDatabase]);
+  }, [schools, selectedProvince, selectedCity, search, levelFilter, selectedStatusFilter, mergedDatabase]);
 
   // Statistics for selected city with full pipeline breakdown
   const cityStats = useMemo(() => {
@@ -443,9 +455,10 @@ export default function SchoolList({
     let baru = 0;
     let dihubungi = 0;
     let followUp = 0;
-    let closing = 0;
-    let closed = 0;
-    let gagal = 0;
+    let prospek = 0;
+    let meetingVisit = 0;
+    let deal = 0;
+    let lost = 0;
 
     databaseSchools.forEach((s) => {
       if (s.isMatched && s.active) {
@@ -453,9 +466,10 @@ export default function SchoolList({
         if (status === 'BARU') baru++;
         else if (status === 'DIHUBUNGI') dihubungi++;
         else if (status === 'FOLLOW UP') followUp++;
-        else if (status === 'CLOSING') closing++;
-        else if (status === 'CLOSED') closed++;
-        else if (status === 'GAGAL') gagal++;
+        else if (status === 'PROSPEK' || (status as string) === 'CLOSING') prospek++;
+        else if (status === 'MEETING / VISIT') meetingVisit++;
+        else if (status === 'DEAL' || (status as string) === 'CLOSED') deal++;
+        else if (status === 'LOST' || (status as string) === 'GAGAL') lost++;
       }
     });
 
@@ -466,9 +480,10 @@ export default function SchoolList({
       baru,
       dihubungi,
       followUp,
-      closing,
-      closed,
-      gagal
+      prospek,
+      meetingVisit,
+      deal,
+      lost
     };
   }, [databaseSchools]);
 
@@ -476,6 +491,12 @@ export default function SchoolList({
   // --- PROSPECT MODE LOGIC (Active Leads Flat List) ---
   const activeFilteredSchools = useMemo(() => {
     return schools.filter((school) => {
+      // Only include schools that have reached the prospect stage!
+      const isProspectStage = ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(school.status);
+      if (!isProspectStage) {
+        return false;
+      }
+
       // 1. Text Search
       const searchLower = search.toLowerCase();
       const nameMatch = school.namaSekolah.toLowerCase().includes(searchLower);
@@ -546,6 +567,10 @@ export default function SchoolList({
       return true;
     });
   }, [schools, search, selectedStatusFilter, selectedPicFilter, probabilityFilter, levelFilter, selectedProvince, selectedCity]);
+
+  const totalProspectsCount = useMemo(() => {
+    return schools.filter(s => ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(s.status)).length;
+  }, [schools]);
 
   // Reset pagination on filter or mode changes
   useMemo(() => {
@@ -710,100 +735,120 @@ export default function SchoolList({
               </p>
             </div>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-              {cityStats.activeCount} dari {cityStats.total} sedang diprospek
+              {viewMode === 'prospects' 
+                ? `${cityStats.prospek + cityStats.meetingVisit + cityStats.deal} prospek aktif`
+                : `${cityStats.activeCount} dari ${cityStats.total} sedang diprospek`}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2" id="region-pipeline-grid">
-            {/* Total Target */}
-            <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Total Database</span>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-slate-900">{cityStats.total}</span>
-                <span className="text-[8px] text-slate-400 font-medium">Sekolah</span>
-              </div>
-            </div>
+          <div className={viewMode === 'prospects' ? "grid grid-cols-1 sm:grid-cols-3 gap-2" : "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-2"} id="region-pipeline-grid">
+            {viewMode === 'database' && (
+              <>
+                {/* Total Target */}
+                <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex flex-col justify-between min-h-[65px]">
+                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Total Database</span>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-lg font-black text-slate-900">{cityStats.total}</span>
+                    <span className="text-[8px] text-slate-400 font-medium">Sekolah</span>
+                  </div>
+                </div>
 
-            {/* Belum Diprospek */}
-            <div className="p-2.5 bg-slate-50/50 border border-dashed border-slate-200 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Belum Aktif</span>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-slate-400">{cityStats.pendingCount}</span>
-                <span className="text-[8px] text-slate-400 font-medium">Target</span>
-              </div>
-            </div>
+                {/* Belum Diprospek */}
+                <div className="p-2.5 bg-slate-50/50 border border-dashed border-slate-200 rounded-xl flex flex-col justify-between min-h-[65px]">
+                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Belum Aktif</span>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-lg font-black text-slate-400">{cityStats.pendingCount}</span>
+                    <span className="text-[8px] text-slate-400 font-medium">Target</span>
+                  </div>
+                </div>
 
-            {/* BARU */}
+                {/* BARU */}
+                <div className="p-2.5 bg-indigo-50/20 border border-indigo-100 rounded-xl flex flex-col justify-between min-h-[65px]">
+                  <div className="flex justify-between items-start gap-1">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Baru</span>
+                    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full shrink-0" />
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-lg font-black text-slate-800">{cityStats.baru}</span>
+                    <span className="text-[8px] text-slate-500 font-medium">Prospek</span>
+                  </div>
+                </div>
+
+                {/* DIHUBUNGI */}
+                <div className="p-2.5 bg-blue-50/20 border border-blue-100 rounded-xl flex flex-col justify-between min-h-[65px]">
+                  <div className="flex justify-between items-start gap-1">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Dihubungi</span>
+                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0" />
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-lg font-black text-blue-700">{cityStats.dihubungi}</span>
+                    <span className="text-[8px] text-blue-500 font-medium">Prospek</span>
+                  </div>
+                </div>
+
+                {/* FOLLOW UP */}
+                <div className="p-2.5 bg-amber-50/20 border border-amber-100 rounded-xl flex flex-col justify-between min-h-[65px]">
+                  <div className="flex justify-between items-start gap-1">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Follow Up</span>
+                    <span className="w-1.5 h-1.5 bg-amber-500 rounded-full shrink-0" />
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-lg font-black text-amber-700">{cityStats.followUp}</span>
+                    <span className="text-[8px] text-amber-500 font-medium">Prospek</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* PROSPEK */}
             <div className="p-2.5 bg-indigo-50/20 border border-indigo-100 rounded-xl flex flex-col justify-between min-h-[65px]">
               <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Baru</span>
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full shrink-0" />
+                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Prospek</span>
+                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full shrink-0" />
               </div>
               <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-slate-800">{cityStats.baru}</span>
-                <span className="text-[8px] text-slate-500 font-medium">Prospek</span>
+                <span className="text-lg font-black text-indigo-700">{cityStats.prospek}</span>
+                <span className="text-[8px] text-indigo-500 font-medium">Prospek</span>
               </div>
             </div>
 
-            {/* DIHUBUNGI */}
-            <div className="p-2.5 bg-blue-50/20 border border-blue-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Dihubungi</span>
-                <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0" />
-              </div>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-blue-700">{cityStats.dihubungi}</span>
-                <span className="text-[8px] text-blue-500 font-medium">Prospek</span>
-              </div>
-            </div>
-
-            {/* FOLLOW UP */}
-            <div className="p-2.5 bg-amber-50/20 border border-amber-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Follow Up</span>
-                <span className="w-1.5 h-1.5 bg-amber-500 rounded-full shrink-0" />
-              </div>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-amber-700">{cityStats.followUp}</span>
-                <span className="text-[8px] text-amber-500 font-medium">Prospek</span>
-              </div>
-            </div>
-
-            {/* CLOSING */}
+            {/* MEETING / VISIT */}
             <div className="p-2.5 bg-purple-50/20 border border-purple-100 rounded-xl flex flex-col justify-between min-h-[65px]">
               <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Closing Stage</span>
+                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Meeting / Visit</span>
                 <span className="w-1.5 h-1.5 bg-purple-500 rounded-full shrink-0" />
               </div>
               <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-purple-700">{cityStats.closing}</span>
-                <span className="text-[8px] text-purple-500 font-medium">Prospek</span>
+                <span className="text-lg font-black text-purple-700">{cityStats.meetingVisit}</span>
+                <span className="text-[8px] text-purple-500 font-medium">Kunjungan</span>
               </div>
             </div>
 
-            {/* CLOSED */}
+            {/* DEAL */}
             <div className="p-2.5 bg-emerald-50/30 border border-emerald-100 rounded-xl flex flex-col justify-between min-h-[65px]">
               <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Deal Closed</span>
+                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Deal</span>
                 <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0" />
               </div>
               <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-emerald-700">{cityStats.closed}</span>
+                <span className="text-lg font-black text-emerald-700">{cityStats.deal}</span>
                 <span className="text-[8px] text-emerald-500 font-medium">Sukses</span>
               </div>
             </div>
 
-            {/* GAGAL */}
-            <div className="p-2.5 bg-rose-50/20 border border-rose-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Gagal</span>
-                <span className="w-1.5 h-1.5 bg-rose-500 rounded-full shrink-0" />
+            {viewMode === 'database' && (
+              /* LOST */
+              <div className="p-2.5 bg-rose-50/20 border border-rose-100 rounded-xl flex flex-col justify-between min-h-[65px]">
+                <div className="flex justify-between items-start gap-1">
+                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Lost</span>
+                  <span className="w-1.5 h-1.5 bg-rose-500 rounded-full shrink-0" />
+                </div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className="text-lg font-black text-rose-700">{cityStats.lost}</span>
+                  <span className="text-[8px] text-rose-500 font-medium">Batal</span>
+                </div>
               </div>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-rose-700">{cityStats.gagal}</span>
-                <span className="text-[8px] text-rose-500 font-medium">Batal</span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       )}
@@ -1203,13 +1248,10 @@ export default function SchoolList({
                 onChange={(e) => setSelectedStatusFilter(e.target.value as MarketingStatus | '')}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 text-xs font-semibold focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all"
               >
-                <option value="">Semua Status</option>
-                <option value="BARU">BARU</option>
-                <option value="DIHUBUNGI">DIHUBUNGI</option>
-                <option value="FOLLOW UP">FOLLOW UP</option>
-                <option value="CLOSING">CLOSING</option>
-                <option value="CLOSED">CLOSED (CLOSING SUCCESS)</option>
-                <option value="GAGAL">GAGAL</option>
+                <option value="">Semua Status Prospek</option>
+                <option value="PROSPEK">PROSPEK</option>
+                <option value="MEETING / VISIT">MEETING / VISIT</option>
+                <option value="DEAL">DEAL</option>
               </select>
             </div>
 
@@ -1267,7 +1309,7 @@ export default function SchoolList({
           </span>
         ) : (
           <span>
-            Menampilkan <b className="text-slate-800 font-bold">{activeFilteredSchools.length}</b> dari {schools.length} prospek aktif
+            Menampilkan <b className="text-slate-800 font-bold">{activeFilteredSchools.length}</b> dari {totalProspectsCount} prospek aktif
             {selectedProvince && <> di <b className="text-indigo-600">{selectedProvince}</b></>}
             {selectedCity && <>, <b className="text-indigo-600">{selectedCity}</b></>}
           </span>
