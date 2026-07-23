@@ -56,7 +56,7 @@ export default function SchoolDetailModal({
   const isAE = currentUser.role === 'AE';
   const isMarketingLapangan = currentUser.role === 'MARKETING_LAPANGAN';
 
-  const isNewSchool = !school;
+  const isNewSchool = !school || school.no === -1;
   
   // - Core fields (Provinsi, Kota, Nama Sekolah, Handles)
   //   Can edit if admin/manager/AE OR if it's a new school being scouted on the field
@@ -142,7 +142,7 @@ export default function SchoolDetailModal({
       setKontakPic2('');
       setKontakPic3('');
       setKontakPic4('');
-      setTanggalKontakAwal(new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }));
+      setTanggalKontakAwal(new Date().toISOString().slice(0, 10));
       setJenisLayanan('');
       setCatatanAwal('');
       setTanggalFollowUpTerakhir('');
@@ -215,13 +215,8 @@ export default function SchoolDetailModal({
     const nextUpdates = [...updates, formattedUpdate];
     setUpdates(nextUpdates);
     
-    // Automatically update the "Last Follow Up Date" to today
-    const todayStr = new Date().toLocaleDateString('id-ID', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric'
-    });
-    setTanggalFollowUpTerakhir(todayStr);
+    // Automatically update the "Last Follow Up Date" to today (ISO format so it round-trips through <input type="date">)
+    setTanggalFollowUpTerakhir(new Date().toISOString().slice(0, 10));
     
     // If they write an update, transition status out of BARU automatically!
     if (status === 'BARU') {

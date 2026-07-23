@@ -13,8 +13,8 @@ import {
 
 interface CSVImportExportProps {
   schools: SchoolRecord[];
-  onImport: (newSchools: SchoolRecord[]) => void;
-  onReset: () => void;
+  onImport: (newSchools: SchoolRecord[]) => Promise<boolean>;
+  onReset: () => void | Promise<void>;
 }
 
 export default function CSVImportExport({ schools, onImport, onReset }: CSVImportExportProps) {
@@ -163,7 +163,7 @@ export default function CSVImportExport({ schools, onImport, onReset }: CSVImpor
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
         if (!text) throw new Error('File kosong atau tidak terbaca');
@@ -280,15 +280,21 @@ export default function CSVImportExport({ schools, onImport, onReset }: CSVImpor
           throw new Error('Tidak ada data sekolah valid yang berhasil diimpor');
         }
 
-        // Apply imported data
-        onImport(importedSchools);
-        setStatusMessage(`Sukses mengimpor ${importedSchools.length} baris data sekolah!`);
-        setIsSuccess(true);
-        setErrorDetail('');
-        setTimeout(() => {
-          setStatusMessage('');
-          setIsSuccess(false);
-        }, 5000);
+        if (!confirm(`Import ini akan MENGGANTI SELURUH database sekolah saat ini (${schools.length} data) dengan ${importedSchools.length} baris dari file CSV. Data yang tidak ada di file akan hilang.\n\nLanjutkan?`)) {
+          return;
+        }
+
+        // Apply imported data (replaces entire dataset on the server)
+        const success = await onImport(importedSchools);
+        if (success) {
+          setStatusMessage(`Sukses mengimpor ${importedSchools.length} baris data sekolah!`);
+          setIsSuccess(true);
+          setErrorDetail('');
+          setTimeout(() => {
+            setStatusMessage('');
+            setIsSuccess(false);
+          }, 5000);
+        }
 
       } catch (err: any) {
         setErrorDetail(err.message || 'Gagal membaca file CSV. Pastikan format kolom sesuai.');
@@ -367,9 +373,9 @@ export default function CSVImportExport({ schools, onImport, onReset }: CSVImpor
             <p className="text-xs text-slate-600 leading-relaxed">Bersihkan seluruh data prospek sekolah, wilayah provinsi, dan kota/kabupaten untuk mulai menginput dari awal.</p>
           </div>
           <button
-            onClick={() => {
+            onClick={async () => {
               if (confirm('Apakah Anda yakin ingin membersihkan seluruh database secara keseluruhan? Semua data sekolah, provinsi, dan kota/kabupaten akan dihapus bersih. Tindakan ini tidak dapat dibatalkan.')) {
-                onReset();
+                await onReset();
                 setStatusMessage('Database berhasil dibersihkan secara keseluruhan! Siap menginput dari awal.');
                 setIsSuccess(true);
                 setTimeout(() => {

@@ -1,13 +1,11 @@
 import React, { useState } from 'react';
-import { TeamMember, UserRole } from '../types';
-import { Lock, User, Briefcase, KeyRound, AlertCircle, Sparkles } from 'lucide-react';
+import { Lock, User, Briefcase, KeyRound, AlertCircle } from 'lucide-react';
 
 interface LoginProps {
-  teamMembers: TeamMember[];
-  onLogin: (user: TeamMember | { username: string; password?: string }) => void;
+  onLogin: (credentials: { username: string; password?: string }) => Promise<void>;
 }
 
-export default function Login({ teamMembers, onLogin }: LoginProps) {
+export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -35,21 +33,6 @@ export default function Login({ teamMembers, onLogin }: LoginProps) {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Helper for quick click login
-  const handleQuickLogin = (user: TeamMember) => {
-    setUsername(user.username);
-    setPassword(user.password || '');
-    onLogin(user);
-  };
-
-  // Find demo users for each role to offer quick credentials
-  const demoUsers = {
-    superadmin: teamMembers.find((u) => u.role === 'SUPERADMIN'),
-    manager: teamMembers.find((u) => u.role === 'MANAGER'),
-    ae: teamMembers.find((u) => u.role === 'AE'),
-    ml: teamMembers.find((u) => u.role === 'MARKETING_LAPANGAN'),
   };
 
   return (

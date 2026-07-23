@@ -1,75 +1,43 @@
 import express from "express";
 import path from "path";
 import pg from "pg";
-import fs from "fs";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
-import { initializeApp } from "firebase/app";
-import { 
-  getFirestore, 
-  collection, 
-  getDocs, 
-  doc, 
-  setDoc, 
-  deleteDoc 
-} from "firebase/firestore";
+
+const SALT_ROUNDS = 10;
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
 
+  app.use(helmet());
   app.use(express.json());
 
   // Database configuration
   const dbUrl = process.env.DATABASE_URL;
   let pool: pg.Pool | null = null;
   let usePostgres = false;
-  let useFirestore = false;
-  let firestoreDb: any = null;
 
-  // Initial team members seed (Super Admin only)
+  // Initial team members seed (Super Admin only) - password hashed before use
   const initialTeamMembers = [
     { id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin', password: 'admin123' },
   ];
 
-  // Fallback in-memory data storage
+  // Fallback in-memory data storage (used only if DATABASE_URL is not set / unreachable)
   let inMemorySchools: any[] = [];
-  let inMemoryTeam: any[] = [...initialTeamMembers];
+  let inMemoryTeam: any[] = await Promise.all(
+    initialTeamMembers.map(async (m) => ({ ...m, password: await bcrypt.hash(m.password, SALT_ROUNDS) }))
+  );
   let inMemoryCustomDb: Record<string, Record<string, any[]>> = {};
 
-  // 1. Initialize Firebase Firestore
-  try {
-    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-    if (fs.existsSync(configPath)) {
-      const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      const firebaseApp = initializeApp(firebaseConfig);
-      const dbId = firebaseConfig.firestoreDatabaseId || undefined;
-      firestoreDb = dbId ? getFirestore(firebaseApp, dbId) : getFirestore(firebaseApp);
-      useFirestore = true;
-      console.log("Successfully connected to Firebase Firestore! Database ID:", dbId);
-
-      // Clean up previous seed members and ensure only superadmin exists or is present
-      const teamSnap = await getDocs(collection(firestoreDb, 'team'));
-      if (teamSnap.empty) {
-        console.log("Seeding initial Super Admin into Firestore...");
-        for (const member of initialTeamMembers) {
-          await setDoc(doc(firestoreDb, 'team', member.id), member);
-        }
-      } else {
-        // Remove dummy seed users if present (manager-1, ae-1..6, ml-1..4)
-        for (const docSnap of teamSnap.docs) {
-          if (docSnap.id.startsWith('manager-') || docSnap.id.startsWith('ae-') || docSnap.id.startsWith('ml-')) {
-            console.log(`Cleaning old dummy team member: ${docSnap.id}`);
-            await deleteDoc(doc(firestoreDb, 'team', docSnap.id));
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Could not initialize Firebase Firestore:", err);
-    useFirestore = false;
-  }
-
-  // 2. Initialize PostgreSQL (if DATABASE_URL is set)
+  // Initialize PostgreSQL (if DATABASE_URL is set)
   if (dbUrl) {
     console.log("Database connection string detected. Attempting to connect to PostgreSQL...");
     pool = new pg.Pool({
@@ -90,7 +58,7 @@ async function startServer() {
           name VARCHAR(255) NOT NULL,
           role VARCHAR(100) NOT NULL,
           username VARCHAR(100) UNIQUE NOT NULL,
-          password VARCHAR(100) NOT NULL
+          password VARCHAR(255) NOT NULL
         );
       `);
 
@@ -135,31 +103,72 @@ async function startServer() {
       if (teamCount === 0) {
         console.log("Seeding initial team members into PostgreSQL...");
         for (const m of initialTeamMembers) {
+          const hashed = await bcrypt.hash(m.password, SALT_ROUNDS);
           await pool.query(
             "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING;",
-            [m.id, m.name, m.role, m.username, m.password]
+            [m.id, m.name, m.role, m.username, hashed]
           );
         }
       }
     } catch (err) {
-      console.error("Failed to connect to PostgreSQL. Falling back to Firestore or in-memory.", err);
+      console.error("Failed to connect to PostgreSQL. Falling back to in-memory storage.", err);
       usePostgres = false;
     }
   }
+
+  // --- AUTH HELPERS ---
+
+  type AuthUser = { id: string; name: string; role: string; username: string };
+
+  function issueToken(user: AuthUser): string {
+    return jwt.sign(user, JWT_SECRET, { expiresIn: '7d' });
+  }
+
+  function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const header = req.headers.authorization;
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!token) {
+      return res.status(401).json({ error: "Autentikasi diperlukan" });
+    }
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as AuthUser;
+      (req as any).user = decoded;
+      next();
+    } catch (err) {
+      return res.status(401).json({ error: "Sesi tidak valid atau sudah kedaluwarsa" });
+    }
+  }
+
+  function requireRole(...roles: string[]) {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const user = (req as any).user as AuthUser | undefined;
+      if (!user || !roles.includes(user.role)) {
+        return res.status(403).json({ error: "Anda tidak memiliki hak akses untuk aksi ini" });
+      }
+      next();
+    };
+  }
+
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Terlalu banyak percobaan login. Coba lagi dalam beberapa menit." }
+  });
 
   // --- API ROUTES ---
 
   // Health Check API
   app.get("/api/health", (req, res) => {
-    res.json({ 
-      status: "ok", 
-      database: usePostgres ? "postgresql" : useFirestore ? "firebase-firestore" : "in-memory-fallback",
-      vps: "cloud-run"
+    res.json({
+      status: "ok",
+      database: usePostgres ? "postgresql" : "in-memory-fallback"
     });
   });
 
   // Authentication Endpoint
-  app.post("/api/login", async (req, res) => {
+  app.post("/api/login", loginLimiter, async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: "Username and password are required" });
@@ -167,95 +176,61 @@ async function startServer() {
 
     const cleanUsername = username.toLowerCase().trim();
 
-    if (usePostgres && pool) {
-      try {
+    try {
+      let row: any = null;
+      if (usePostgres && pool) {
         const result = await pool.query(
-          "SELECT id, name, role, username, password FROM team WHERE LOWER(username) = $1 AND password = $2;",
-          [cleanUsername, password]
+          "SELECT id, name, role, username, password FROM team WHERE LOWER(username) = $1;",
+          [cleanUsername]
         );
-        if (result.rows.length > 0) {
-          return res.json(result.rows[0]);
-        } else {
-          return res.status(401).json({ error: "Username atau password salah!" });
-        }
-      } catch (err) {
-        console.error("Login error in Postgres", err);
-        return res.status(500).json({ error: "Gagal memproses login" });
-      }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const snap = await getDocs(collection(firestoreDb, 'team'));
-        let foundUser: any = null;
-        snap.forEach(d => {
-          const data = d.data();
-          if (data.username && data.username.toLowerCase().trim() === cleanUsername && data.password === password) {
-            foundUser = data;
-          }
-        });
-        if (foundUser) {
-          return res.json(foundUser);
-        } else {
-          return res.status(401).json({ error: "Username atau password salah!" });
-        }
-      } catch (err) {
-        console.error("Login error in Firestore", err);
-        return res.status(500).json({ error: "Gagal memproses login" });
-      }
-    } else {
-      const user = inMemoryTeam.find(
-        u => u.username.toLowerCase() === cleanUsername && u.password === password
-      );
-      if (user) {
-        return res.json(user);
+        row = result.rows[0] || null;
       } else {
+        row = inMemoryTeam.find(u => u.username.toLowerCase() === cleanUsername) || null;
+      }
+
+      if (!row || !(await bcrypt.compare(password, row.password))) {
         return res.status(401).json({ error: "Username atau password salah!" });
       }
+
+      const authUser: AuthUser = { id: row.id, name: row.name, role: row.role, username: row.username };
+      const token = issueToken(authUser);
+      return res.json({ token, user: authUser });
+    } catch (err) {
+      console.error("Login error", err);
+      return res.status(500).json({ error: "Gagal memproses login" });
     }
   });
 
-  // GET all team members
-  app.get("/api/team", async (req, res) => {
+  // GET all team members (password never included)
+  app.get("/api/team", requireAuth, async (req, res) => {
     if (usePostgres && pool) {
       try {
-        const result = await pool.query("SELECT id, name, role, username, password FROM team ORDER BY name ASC;");
+        const result = await pool.query("SELECT id, name, role, username FROM team ORDER BY name ASC;");
         return res.json(result.rows);
       } catch (err) {
         console.error("Failed to fetch team members", err);
         return res.status(500).json({ error: "Failed to load team members" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const snap = await getDocs(collection(firestoreDb, 'team'));
-        const teamList: any[] = [];
-        snap.forEach(d => {
-          teamList.push(d.data());
-        });
-        teamList.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        return res.json(teamList);
-      } catch (err) {
-        console.error("Failed to fetch team from Firestore", err);
-        return res.status(500).json({ error: "Failed to load team members" });
-      }
     } else {
-      return res.json(inMemoryTeam);
+      return res.json(inMemoryTeam.map(({ password, ...rest }) => rest));
     }
   });
 
-  // ADD or UPDATE a team member
-  app.post("/api/team", async (req, res) => {
+  // ADD or UPDATE a team member (SUPERADMIN only)
+  app.post("/api/team", requireAuth, requireRole('SUPERADMIN'), async (req, res) => {
     const member = req.body;
     if (!member.name || !member.role || !member.username) {
       return res.status(400).json({ error: "Nama, role, dan username wajib diisi" });
     }
 
     const cleanUsername = member.username.toLowerCase().trim();
-    const pass = member.password || 'password123';
+    const plainPassword = member.password || 'password123';
+    const hashedPassword = await bcrypt.hash(plainPassword, SALT_ROUNDS);
     const memberObj = {
       id: member.id || `${member.role.toLowerCase()}-${Date.now()}`,
       name: member.name,
       role: member.role,
       username: cleanUsername,
-      password: pass
     };
 
     if (usePostgres && pool) {
@@ -264,14 +239,21 @@ async function startServer() {
         const exists = existsResult.rows.length > 0;
 
         if (exists) {
-          await pool.query(
-            "UPDATE team SET name = $1, role = $2, username = $3, password = $4 WHERE id = $5;",
-            [memberObj.name, memberObj.role, memberObj.username, memberObj.password, memberObj.id]
-          );
+          if (member.password) {
+            await pool.query(
+              "UPDATE team SET name = $1, role = $2, username = $3, password = $4 WHERE id = $5;",
+              [memberObj.name, memberObj.role, memberObj.username, hashedPassword, memberObj.id]
+            );
+          } else {
+            await pool.query(
+              "UPDATE team SET name = $1, role = $2, username = $3 WHERE id = $4;",
+              [memberObj.name, memberObj.role, memberObj.username, memberObj.id]
+            );
+          }
         } else {
           await pool.query(
             "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5);",
-            [memberObj.id, memberObj.name, memberObj.role, memberObj.username, memberObj.password]
+            [memberObj.id, memberObj.name, memberObj.role, memberObj.username, hashedPassword]
           );
         }
         return res.json(memberObj);
@@ -279,27 +261,20 @@ async function startServer() {
         console.error("Failed to save team member in Postgres", err);
         return res.status(500).json({ error: "Failed to save team member" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        await setDoc(doc(firestoreDb, 'team', memberObj.id), memberObj);
-        return res.json(memberObj);
-      } catch (err) {
-        console.error("Failed to save team member in Firestore", err);
-        return res.status(500).json({ error: "Failed to save team member" });
-      }
     } else {
       const idx = inMemoryTeam.findIndex(t => t.id === memberObj.id);
+      const stored = { ...memberObj, password: hashedPassword };
       if (idx !== -1) {
-        inMemoryTeam[idx] = memberObj;
+        inMemoryTeam[idx] = member.password ? stored : { ...stored, password: inMemoryTeam[idx].password };
       } else {
-        inMemoryTeam.push(memberObj);
+        inMemoryTeam.push(stored);
       }
       return res.json(memberObj);
     }
   });
 
-  // DELETE a team member
-  app.delete("/api/team/:id", async (req, res) => {
+  // DELETE a team member (SUPERADMIN only)
+  app.delete("/api/team/:id", requireAuth, requireRole('SUPERADMIN'), async (req, res) => {
     const memberId = req.params.id;
     if (!memberId) {
       return res.status(400).json({ error: "ID anggota tidak valid" });
@@ -313,59 +288,37 @@ async function startServer() {
         console.error("Failed to delete team member in Postgres", err);
         return res.status(500).json({ error: "Gagal menghapus anggota tim" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        await deleteDoc(doc(firestoreDb, 'team', memberId));
-        return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
-      } catch (err) {
-        console.error("Failed to delete team member in Firestore", err);
-        return res.status(500).json({ error: "Gagal menghapus anggota tim" });
-      }
     } else {
       inMemoryTeam = inMemoryTeam.filter(t => t.id !== memberId);
       return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
     }
   });
 
-  // RESET team members (Keep superadmin only)
-  app.post("/api/team/reset", async (req, res) => {
-    const superAdminObj = { id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin', password: 'admin123' };
+  // RESET team members (Keep superadmin only) (SUPERADMIN only)
+  app.post("/api/team/reset", requireAuth, requireRole('SUPERADMIN'), async (req, res) => {
+    const hashedDefault = await bcrypt.hash('admin123', SALT_ROUNDS);
+    const superAdminObj = { id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin' };
 
     if (usePostgres && pool) {
       try {
         await pool.query("DELETE FROM team WHERE id != 'admin-1' AND LOWER(username) != 'superadmin';");
         await pool.query(
-          "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name=$2, role=$3, username=$4, password=$5;",
-          [superAdminObj.id, superAdminObj.name, superAdminObj.role, superAdminObj.username, superAdminObj.password]
+          "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name=$2, role=$3, username=$4;",
+          [superAdminObj.id, superAdminObj.name, superAdminObj.role, superAdminObj.username, hashedDefault]
         );
         return res.json({ success: true, message: "Database tim berhasil di-reset. Tersisa Super Admin.", team: [superAdminObj] });
       } catch (err) {
         console.error("Failed to reset team in Postgres", err);
         return res.status(500).json({ error: "Gagal me-reset database tim" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const teamSnap = await getDocs(collection(firestoreDb, 'team'));
-        for (const docSnap of teamSnap.docs) {
-          const data = docSnap.data();
-          if (docSnap.id !== 'admin-1' && data.username !== 'superadmin') {
-            await deleteDoc(doc(firestoreDb, 'team', docSnap.id));
-          }
-        }
-        await setDoc(doc(firestoreDb, 'team', 'admin-1'), superAdminObj);
-        return res.json({ success: true, message: "Database tim berhasil di-reset. Tersisa Super Admin.", team: [superAdminObj] });
-      } catch (err) {
-        console.error("Failed to reset team in Firestore", err);
-        return res.status(500).json({ error: "Gagal me-reset database tim" });
-      }
     } else {
-      inMemoryTeam = [superAdminObj];
+      inMemoryTeam = [{ ...superAdminObj, password: hashedDefault }];
       return res.json({ success: true, message: "Database tim berhasil di-reset. Tersisa Super Admin.", team: [superAdminObj] });
     }
   });
 
   // GET all schools
-  app.get("/api/schools", async (req, res) => {
+  app.get("/api/schools", requireAuth, async (req, res) => {
     if (usePostgres && pool) {
       try {
         const result = await pool.query("SELECT * FROM schools ORDER BY no DESC;");
@@ -396,26 +349,13 @@ async function startServer() {
         console.error("Failed to query schools", err);
         return res.status(500).json({ error: "Failed to load schools" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const snap = await getDocs(collection(firestoreDb, 'schools'));
-        const schoolsList: any[] = [];
-        snap.forEach(d => {
-          schoolsList.push(d.data());
-        });
-        schoolsList.sort((a, b) => (b.no || 0) - (a.no || 0));
-        return res.json(schoolsList);
-      } catch (err) {
-        console.error("Failed to fetch schools from Firestore", err);
-        return res.status(500).json({ error: "Failed to load schools" });
-      }
     } else {
       return res.json(inMemorySchools);
     }
   });
 
   // SAVE or UPDATE a school
-  app.post("/api/schools", async (req, res) => {
+  app.post("/api/schools", requireAuth, async (req, res) => {
     const school = req.body;
     if (!school.namaSekolah) {
       return res.status(400).json({ error: "Nama sekolah wajib diisi" });
@@ -429,7 +369,7 @@ async function startServer() {
 
         if (exists) {
           await pool.query(
-            `UPDATE schools SET 
+            `UPDATE schools SET
               nama_sekolah = $1, original_name = $2, provinsi = $3, kota = $4,
               instagram_handle = $5, tiktok_handle = $6, pic_marketing = $7, marketing_lapangan = $8,
               status = $9, kontak_pic1 = $10, kontak_pic2 = $11, kontak_pic3 = $12, kontak_pic4 = $13,
@@ -468,23 +408,6 @@ async function startServer() {
         console.error("Failed to save school in Postgres", err);
         return res.status(500).json({ error: "Failed to save school" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        if (!school.no) {
-          const snap = await getDocs(collection(firestoreDb, 'schools'));
-          let maxNo = 0;
-          snap.forEach(d => {
-            const data = d.data();
-            if (data.no && data.no > maxNo) maxNo = data.no;
-          });
-          school.no = maxNo + 1;
-        }
-        await setDoc(doc(firestoreDb, 'schools', String(school.no)), school);
-        return res.json(school);
-      } catch (err) {
-        console.error("Failed to save school in Firestore", err);
-        return res.status(500).json({ error: "Failed to save school" });
-      }
     } else {
       const idx = inMemorySchools.findIndex(s => s.no === school.no);
       if (idx !== -1) {
@@ -498,8 +421,48 @@ async function startServer() {
     }
   });
 
-  // DELETE a school
-  app.delete("/api/schools/:no", async (req, res) => {
+  // BULK REPLACE all schools (used by CSV import and full database reset)
+  app.post("/api/schools/bulk-replace", requireAuth, async (req, res) => {
+    const incoming: any[] = Array.isArray(req.body) ? req.body : [];
+
+    if (usePostgres && pool) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN;");
+        await client.query("DELETE FROM schools;");
+        for (const school of incoming) {
+          await client.query(
+            `INSERT INTO schools (
+              nama_sekolah, original_name, provinsi, kota, instagram_handle, tiktok_handle,
+              pic_marketing, marketing_lapangan, status, kontak_pic1, kontak_pic2, kontak_pic3, kontak_pic4,
+              tanggal_kontak_awal, jenis_layanan, catatan_awal, tanggal_follow_up_terakhir, kemungkinan_closing, updates
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);`,
+            [
+              school.namaSekolah, school.originalName || null, school.provinsi || null, school.kota || null,
+              school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || '', school.marketingLapangan || null,
+              school.status, school.kontakPic1 || '', school.kontakPic2 || '', school.kontakPic3 || '', school.kontakPic4 || '',
+              school.tanggalKontakAwal || '', school.jenisLayanan || '', school.catatanAwal || '', school.tanggalFollowUpTerakhir || '',
+              school.kemungkinanClosing || '', JSON.stringify(school.updates || [])
+            ]
+          );
+        }
+        await client.query("COMMIT;");
+        return res.json({ success: true, count: incoming.length });
+      } catch (err) {
+        await client.query("ROLLBACK;");
+        console.error("Bulk school replace failed", err);
+        return res.status(500).json({ error: "Gagal mengganti seluruh data sekolah" });
+      } finally {
+        client.release();
+      }
+    } else {
+      inMemorySchools = incoming;
+      return res.json({ success: true, count: incoming.length });
+    }
+  });
+
+  // DELETE a school (SUPERADMIN, MANAGER, AE only)
+  app.delete("/api/schools/:no", requireAuth, requireRole('SUPERADMIN', 'MANAGER', 'AE'), async (req, res) => {
     const schoolNo = parseInt(req.params.no);
     if (isNaN(schoolNo)) {
       return res.status(400).json({ error: "Nomor sekolah tidak valid" });
@@ -513,14 +476,6 @@ async function startServer() {
         console.error("Failed to delete school in Postgres", err);
         return res.status(500).json({ error: "Gagal menghapus sekolah" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        await deleteDoc(doc(firestoreDb, 'schools', String(schoolNo)));
-        return res.json({ success: true, message: "Sekolah berhasil dihapus" });
-      } catch (err) {
-        console.error("Failed to delete school in Firestore", err);
-        return res.status(500).json({ error: "Gagal menghapus sekolah" });
-      }
     } else {
       inMemorySchools = inMemorySchools.filter(s => s.no !== schoolNo);
       return res.json({ success: true, message: "Sekolah berhasil dihapus" });
@@ -528,7 +483,7 @@ async function startServer() {
   });
 
   // GET Custom Database
-  app.get("/api/custom-db", async (req, res) => {
+  app.get("/api/custom-db", requireAuth, async (req, res) => {
     if (usePostgres && pool) {
       try {
         const result = await pool.query("SELECT * FROM custom_database;");
@@ -536,10 +491,10 @@ async function startServer() {
         result.rows.forEach(row => {
           const prov = row.provinsi.toUpperCase().trim();
           const city = row.kota.toUpperCase().trim();
-          
+
           if (!structured[prov]) structured[prov] = {};
           if (!structured[prov][city]) structured[prov][city] = [];
-          
+
           structured[prov][city].push({
             name: row.name,
             instagramHandle: row.instagram_handle || "",
@@ -551,83 +506,37 @@ async function startServer() {
         console.error("Failed to load custom database", err);
         return res.status(500).json({ error: "Gagal memuat database survei custom" });
       }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const snap = await getDocs(collection(firestoreDb, 'custom_database'));
-        const structured: Record<string, Record<string, any[]>> = {};
-        snap.forEach(d => {
-          const row = d.data();
-          const prov = (row.provinsi || '').toUpperCase().trim();
-          const city = (row.kota || '').toUpperCase().trim();
-          if (prov && city) {
-            if (!structured[prov]) structured[prov] = {};
-            if (!structured[prov][city]) structured[prov][city] = [];
-            structured[prov][city].push({
-              name: row.name,
-              instagramHandle: row.instagramHandle || row.instagram_handle || "",
-              tiktokHandle: row.tiktokHandle || row.tiktok_handle || ""
-            });
-          }
-        });
-        return res.json(structured);
-      } catch (err) {
-        console.error("Failed to load custom db from Firestore", err);
-        return res.status(500).json({ error: "Gagal memuat database survei custom" });
-      }
     } else {
       return res.json(inMemoryCustomDb);
     }
   });
 
   // BULK SAVE Custom Database
-  app.post("/api/custom-db-bulk", async (req, res) => {
+  app.post("/api/custom-db-bulk", requireAuth, async (req, res) => {
     const customDb = req.body;
     if (usePostgres && pool) {
+      const client = await pool.connect();
       try {
-        await pool.query("BEGIN;");
-        await pool.query("DELETE FROM custom_database;");
+        await client.query("BEGIN;");
+        await client.query("DELETE FROM custom_database;");
         for (const prov of Object.keys(customDb)) {
           for (const city of Object.keys(customDb[prov])) {
             for (const sch of customDb[prov][city]) {
-              await pool.query(
+              await client.query(
                 "INSERT INTO custom_database (provinsi, kota, name, instagram_handle, tiktok_handle) VALUES ($1, $2, $3, $4, $5);",
                 [prov.toUpperCase().trim(), city.toUpperCase().trim(), sch.name, sch.instagramHandle || sch.instagram || "", sch.tiktokHandle || sch.tiktok || ""]
               );
             }
           }
         }
-        await pool.query("COMMIT;");
+        await client.query("COMMIT;");
         return res.json({ success: true });
       } catch (err) {
-        if (pool) await pool.query("ROLLBACK;");
+        await client.query("ROLLBACK;");
         console.error("Bulk custom-db sync failed", err);
         return res.status(500).json({ error: "Gagal mensinkronisasikan database survei" });
-      }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const snap = await getDocs(collection(firestoreDb, 'custom_database'));
-        for (const d of snap.docs) {
-          await deleteDoc(d.ref);
-        }
-        let counter = 0;
-        for (const prov of Object.keys(customDb)) {
-          for (const city of Object.keys(customDb[prov])) {
-            for (const sch of customDb[prov][city]) {
-              counter++;
-              await setDoc(doc(firestoreDb, 'custom_database', `custom_${counter}`), {
-                provinsi: prov.toUpperCase().trim(),
-                kota: city.toUpperCase().trim(),
-                name: sch.name,
-                instagramHandle: sch.instagramHandle || sch.instagram || "",
-                tiktokHandle: sch.tiktokHandle || sch.tiktok || ""
-              });
-            }
-          }
-        }
-        return res.json({ success: true });
-      } catch (err) {
-        console.error("Bulk custom-db sync failed in Firestore", err);
-        return res.status(500).json({ error: "Gagal mensinkronisasikan database survei" });
+      } finally {
+        client.release();
       }
     } else {
       inMemoryCustomDb = customDb;
@@ -636,7 +545,7 @@ async function startServer() {
   });
 
   // ADD Custom Database Entry
-  app.post("/api/custom-db", async (req, res) => {
+  app.post("/api/custom-db", requireAuth, async (req, res) => {
     const { provinsi, kota, school } = req.body;
     if (!provinsi || !kota || !school || !school.name) {
       return res.status(400).json({ error: "Data survei tidak lengkap" });
@@ -654,21 +563,6 @@ async function startServer() {
         return res.json({ success: true });
       } catch (err) {
         console.error("Failed to add custom database entry", err);
-        return res.status(500).json({ error: "Gagal menyimpan data survei" });
-      }
-    } else if (useFirestore && firestoreDb) {
-      try {
-        const docId = `custom_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        await setDoc(doc(firestoreDb, 'custom_database', docId), {
-          provinsi: provUpper,
-          kota: cityUpper,
-          name: school.name,
-          instagramHandle: school.instagramHandle || "",
-          tiktokHandle: school.tiktokHandle || ""
-        });
-        return res.json({ success: true });
-      } catch (err) {
-        console.error("Failed to add custom database entry in Firestore", err);
         return res.status(500).json({ error: "Gagal menyimpan data survei" });
       }
     } else {

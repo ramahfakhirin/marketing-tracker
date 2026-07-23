@@ -13,18 +13,19 @@ import {
   Sparkles,
   Layers
 } from 'lucide-react';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  ResponsiveContainer, 
-  PieChart, 
-  Pie, 
-  Cell, 
-  Legend 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend
 } from 'recharts';
+import { formatIndonesianDate } from '../lib/phoneUtils';
 
 interface DashboardProps {
   schools: SchoolRecord[];
@@ -177,7 +178,7 @@ export default function Dashboard({ schools, onSelectSchool, onFilterStatus, onF
         lastUpdate: s.updates[s.updates.length - 1],
         status: s.status,
         pic: s.picMarketing || 'Tanpa PIC',
-        tanggal: s.tanggalFollowUpTerakhir || s.tanggalKontakAwal || 'Hari ini'
+        tanggal: s.tanggalFollowUpTerakhir ? formatIndonesianDate(s.tanggalFollowUpTerakhir) : s.tanggalKontakAwal ? formatIndonesianDate(s.tanggalKontakAwal) : 'Hari ini'
       }))
       .slice(0, 5);
   }, [schools]);

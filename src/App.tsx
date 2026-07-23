@@ -1,7 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import { SchoolRecord, MarketingStatus, TeamMember, UserRole } from './types';
-import { getInitialSchools } from './data/schoolsSeed';
-import { getInitialTeamMembers } from './data/teamSeed';
 import { SURVEYED_DATABASE } from './data/surveyedSchools';
 import Dashboard from './components/Dashboard';
 import SchoolList from './components/SchoolList';
@@ -29,6 +27,7 @@ import {
 
 const LOCAL_STORAGE_KEY = 'ae_marketing_tracker_schools_v2';
 const TEAM_STORAGE_KEY = 'ae_marketing_tracker_team_v1';
+const TOKEN_STORAGE_KEY = 'ae_marketing_tracker_token_v2';
 
 export default function App() {
   const [schools, setSchools] = useState<SchoolRecord[]>([]);
@@ -39,7 +38,27 @@ export default function App() {
 
   // Auth & Session States
   const [currentUser, setCurrentUser] = useState<TeamMember | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [authHydrated, setAuthHydrated] = useState(false);
+
+  // Fetch wrapper that attaches the session token and auto-logs-out on 401
+  const authFetch = async (url: string, options: RequestInit = {}, token?: string | null) => {
+    const activeToken = token !== undefined ? token : authToken;
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+      },
+    });
+    if (res.status === 401) {
+      setCurrentUser(null);
+      setAuthToken(null);
+      localStorage.removeItem('ae_marketing_tracker_current_user_v1');
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+    return res;
+  };
 
   // Custom surveyed database state for expansion
   const [customDatabase, setCustomDatabase] = useState<Record<string, Record<string, any[]>>>({});
@@ -119,100 +138,52 @@ export default function App() {
   const [selectedProvince, setSelectedProvince] = useState<string>('JAWA TIMUR');
   const [selectedCity, setSelectedCity] = useState<string>('SURABAYA');
 
-  // Load initial data from Express backend with local storage fallbacks
+  // Hydrate session first; only load server data once a valid session token exists
   useEffect(() => {
-    const loadData = async () => {
-      // 1. Load custom database
-      try {
-        const res = await fetch('/api/custom-db');
-        if (res.ok) {
-          const data = await res.json();
-          setCustomDatabase(data);
-        } else {
-          throw new Error('Not ok');
-        }
-      } catch (e) {
-        console.warn('Failed to load custom database from server, using local fallback', e);
-        const savedCustomDb = localStorage.getItem('ae_custom_surveyed_database_v2');
-        if (savedCustomDb) {
-          try {
-            setCustomDatabase(JSON.parse(savedCustomDb));
-          } catch (err) {
-            console.error('Failed to parse custom database', err);
-          }
-        }
-      }
-
-      // 2. Load schools
-      try {
-        const res = await fetch('/api/schools');
-        if (res.ok) {
-          const data = await res.json();
-          setSchools(data);
-        } else {
-          throw new Error('Not ok');
-        }
-      } catch (e) {
-        console.warn('Failed to load schools from server, using local fallback', e);
-        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (saved) {
-          try {
-            setSchools(JSON.parse(saved));
-          } catch (err) {
-            console.error('Failed to parse saved schools, falling back to seed', err);
-            const seed = getInitialSchools();
-            setSchools(seed);
-            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(seed));
-          }
-        } else {
-          const seed = getInitialSchools();
-          setSchools(seed);
-          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(seed));
-        }
-      }
-
-      // 3. Load team members
-      try {
-        const res = await fetch('/api/team');
-        if (res.ok) {
-          const data = await res.json();
-          setTeamMembers(data);
-        } else {
-          throw new Error('Not ok');
-        }
-      } catch (e) {
-        console.warn('Failed to load team from server, using local fallback', e);
-        const savedTeam = localStorage.getItem(TEAM_STORAGE_KEY);
-        if (savedTeam) {
-          try {
-            setTeamMembers(JSON.parse(savedTeam));
-          } catch (err) {
-            console.error('Failed to parse saved team, falling back to seed', err);
-            const teamSeed = getInitialTeamMembers();
-            setTeamMembers(teamSeed);
-            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
-          }
-        } else {
-          const teamSeed = getInitialTeamMembers();
-          setTeamMembers(teamSeed);
-          localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
-        }
-      }
-
-      // 4. Load session
+    const hydrate = async () => {
+      const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
       const savedUser = localStorage.getItem('ae_marketing_tracker_current_user_v1');
-      if (savedUser) {
+
+      if (savedToken && savedUser) {
         try {
+          setAuthToken(savedToken);
           setCurrentUser(JSON.parse(savedUser));
+          await loadServerData(savedToken);
         } catch (e) {
-          console.error('Failed to parse current user session', e);
+          console.error('Failed to restore session', e);
+          localStorage.removeItem(TOKEN_STORAGE_KEY);
+          localStorage.removeItem('ae_marketing_tracker_current_user_v1');
         }
       }
       setAuthHydrated(true);
     };
 
-    loadData();
+    hydrate();
   }, []);
+
+  // Load schools, team, and custom database from the server (requires an authenticated session)
+  const loadServerData = async (token: string) => {
+    try {
+      const res = await authFetch('/api/custom-db', {}, token);
+      if (res.ok) setCustomDatabase(await res.json());
+    } catch (e) {
+      console.warn('Failed to load custom database from server', e);
+    }
+
+    try {
+      const res = await authFetch('/api/schools', {}, token);
+      if (res.ok) setSchools(await res.json());
+    } catch (e) {
+      console.warn('Failed to load schools from server', e);
+    }
+
+    try {
+      const res = await authFetch('/api/team', {}, token);
+      if (res.ok) setTeamMembers(await res.json());
+    } catch (e) {
+      console.warn('Failed to load team from server', e);
+    }
+  };
 
   // Enforce available tabs based on user role
   useEffect(() => {
@@ -221,9 +192,9 @@ export default function App() {
     }
   }, [currentUser, availableTabs, activeTab]);
 
-  const handleLogin = async (user: TeamMember | { username: string; password?: string }) => {
-    const cleanUsername = user.username.toLowerCase().trim();
-    const cleanPassword = user.password || '';
+  const handleLogin = async (credentials: { username: string; password?: string }) => {
+    const cleanUsername = credentials.username.toLowerCase().trim();
+    const cleanPassword = credentials.password || '';
 
     try {
       const res = await fetch('/api/login', {
@@ -231,78 +202,48 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: cleanUsername, password: cleanPassword })
       });
+      const data = await res.json();
       if (res.ok) {
-        const authenticatedUser = await res.json();
-        setCurrentUser(authenticatedUser);
-        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(authenticatedUser));
-        
-        if (authenticatedUser.role === 'MARKETING_LAPANGAN') {
+        setCurrentUser(data.user);
+        setAuthToken(data.token);
+        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(data.user));
+        localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
+        await loadServerData(data.token);
+
+        if (data.user.role === 'MARKETING_LAPANGAN') {
           setActiveTab('prospects');
         } else {
           setActiveTab('dashboard');
         }
-        return;
       } else {
-        const errorData = await res.json();
-        // If server responded with error status (e.g. 401), check client fallback if available
-        const foundLocal = teamMembers.find(u => u.username.toLowerCase() === cleanUsername);
-        if (foundLocal && foundLocal.password && foundLocal.password === cleanPassword) {
-          setCurrentUser(foundLocal);
-          localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(foundLocal));
-          if (foundLocal.role === 'MARKETING_LAPANGAN') setActiveTab('prospects');
-          else setActiveTab('dashboard');
-          return;
-        }
-        alert(errorData.error || "Username atau password salah!");
-        return;
+        alert(data.error || "Username atau password salah!");
       }
     } catch (e) {
-      console.warn('Login connection failed, using client fallback', e);
+      console.error('Login request failed', e);
+      alert("Tidak dapat terhubung ke server. Coba lagi.");
     }
-
-    // Client fallback if server is unreachable
-    const foundLocal = teamMembers.find(u => u.username.toLowerCase() === cleanUsername);
-    if (foundLocal) {
-      if (!foundLocal.password || foundLocal.password === cleanPassword) {
-        setCurrentUser(foundLocal);
-        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(foundLocal));
-        if (foundLocal.role === 'MARKETING_LAPANGAN') setActiveTab('prospects');
-        else setActiveTab('dashboard');
-        return;
-      }
-    } else if ('role' in user) {
-      setCurrentUser(user);
-      localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(user));
-      if (user.role === 'MARKETING_LAPANGAN') setActiveTab('prospects');
-      else setActiveTab('dashboard');
-      return;
-    }
-
-    alert("Username atau password salah!");
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setAuthToken(null);
     localStorage.removeItem('ae_marketing_tracker_current_user_v1');
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
   };
 
-  // Save to local storage helper
   const saveSchools = (updatedSchools: SchoolRecord[]) => {
     setSchools(updatedSchools);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedSchools));
   };
 
   const saveTeamMembers = (updatedTeam: TeamMember[]) => {
     setTeamMembers(updatedTeam);
-    localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(updatedTeam));
   };
 
   const saveCustomDatabase = async (newDb: Record<string, Record<string, any[]>>) => {
     setCustomDatabase(newDb);
-    localStorage.setItem('ae_custom_surveyed_database_v2', JSON.stringify(newDb));
 
     try {
-      await fetch('/api/custom-db-bulk', {
+      await authFetch('/api/custom-db-bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newDb)
@@ -312,41 +253,33 @@ export default function App() {
     }
   };
 
-  // Callback to register team member
-  const handleAddTeamMember = async (name: string, role: UserRole, username: string, password?: string) => {
+  // Callback to register team member (returns an error message on failure, undefined on success)
+  const handleAddTeamMember = async (name: string, role: UserRole, username: string, password?: string): Promise<string | undefined> => {
     const cleanUsername = username.toLowerCase().trim();
-    const cleanPassword = password?.trim() || 'password123';
-
-    const newMember: TeamMember = {
+    const newMember = {
       id: `${role.toLowerCase()}-${Date.now()}`,
       name,
       role,
       username: cleanUsername,
-      password: cleanPassword,
+      password: password?.trim() || undefined,
     };
 
     try {
-      const res = await fetch('/api/team', {
+      const res = await authFetch('/api/team', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newMember)
       });
+      const data = await res.json();
       if (res.ok) {
-        const saved = await res.json();
-        const memberWithPass = { ...saved, password: cleanPassword };
-        setTeamMembers(prev => {
-          const next = [...prev.filter(t => t.id !== saved.id && t.username !== cleanUsername), memberWithPass];
-          localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(next));
-          return next;
-        });
-        return;
+        setTeamMembers(prev => [...prev.filter(t => t.id !== data.id && t.username !== cleanUsername), data]);
+        return undefined;
       }
+      return data.error || 'Gagal menambahkan anggota tim';
     } catch (e) {
       console.error('Failed saving team member to server', e);
+      return 'Tidak dapat terhubung ke server';
     }
-
-    const nextTeam = [...teamMembers.filter(t => t.username !== cleanUsername), newMember];
-    saveTeamMembers(nextTeam);
   };
 
   // Callback to delete team member and clear their penugasan on schools
@@ -355,7 +288,7 @@ export default function App() {
     if (!memberToDelete) return;
 
     try {
-      await fetch(`/api/team/${id}`, { method: 'DELETE' });
+      await authFetch(`/api/team/${id}`, { method: 'DELETE' });
     } catch (e) {
       console.error('Failed to delete team member on server', e);
     }
@@ -395,22 +328,18 @@ export default function App() {
   // Callback to reset marketing team database, keeping only Super Admin
   const handleResetTeam = async () => {
     try {
-      const res = await fetch('/api/team/reset', { method: 'POST' });
+      const res = await authFetch('/api/team/reset', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setTeamMembers(data.team);
-        localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data.team));
         alert("Database tim marketing berhasil di-reset. Tersisa Super Admin.");
-        return;
+      } else {
+        alert("Gagal me-reset database tim di server.");
       }
     } catch (e) {
       console.error('Failed resetting team on server', e);
+      alert("Tidak dapat terhubung ke server.");
     }
-
-    const resetSeed = getInitialTeamMembers();
-    setTeamMembers(resetSeed);
-    localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(resetSeed));
-    alert("Database tim marketing di-reset secara lokal. Tersisa Super Admin.");
   };
 
   // Callback to update or add a school
@@ -422,7 +351,7 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/schools', {
+      const res = await authFetch('/api/schools', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedSchool)
@@ -434,37 +363,51 @@ export default function App() {
         } else {
           setSchools(prev => prev.map(s => s.no === saved.no ? saved : s));
         }
-        return;
+      } else {
+        alert('Gagal menyimpan sekolah ke server.');
       }
     } catch (e) {
-      console.warn('Failed saving school to server, using client fallback', e);
+      console.error('Failed saving school to server', e);
+      alert('Tidak dapat terhubung ke server.');
     }
-
-    const exists = schools.some(s => s.no === updatedSchool.no);
-    let nextSchools: SchoolRecord[] = [];
-
-    if (exists) {
-      // Update
-      nextSchools = schools.map(s => s.no === updatedSchool.no ? updatedSchool : s);
-    } else {
-      nextSchools = [updatedSchool, ...schools];
-    }
-
-    saveSchools(nextSchools);
   };
 
   // Callback to delete a school
   const handleDeleteSchool = async (schoolNo: number) => {
     try {
-      await fetch(`/api/schools/${schoolNo}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/schools/${schoolNo}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSchools(prev => prev.filter(s => Number(s.no) !== Number(schoolNo)));
+      } else {
+        alert('Gagal menghapus sekolah di server.');
+      }
     } catch (e) {
-      console.warn('Failed to delete school on server, using client fallback', e);
+      console.error('Failed to delete school on server', e);
+      alert('Tidak dapat terhubung ke server.');
     }
-
-    const nextSchools = schools.filter(s => Number(s.no) !== Number(schoolNo));
-    saveSchools(nextSchools);
     setIsDetailOpen(false);
     setSelectedSchool(null);
+  };
+
+  // Callback to bulk-replace all schools (CSV import / full database reset) - always persists to server
+  const handleBulkReplaceSchools = async (newSchools: SchoolRecord[]) => {
+    try {
+      const res = await authFetch('/api/schools/bulk-replace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSchools)
+      });
+      if (res.ok) {
+        setSchools(newSchools);
+        return true;
+      }
+      alert('Gagal menyimpan data ke server.');
+      return false;
+    } catch (e) {
+      console.error('Failed to bulk-replace schools on server', e);
+      alert('Tidak dapat terhubung ke server.');
+      return false;
+    }
   };
 
   // Callback from dashboard to filter status
@@ -510,7 +453,7 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <Login teamMembers={teamMembers} onLogin={handleLogin} />;
+    return <Login onLogin={handleLogin} />;
   }
 
   return (
@@ -766,13 +709,10 @@ export default function App() {
           {activeTab === 'sync' && (
             <CSVImportExport
               schools={schools}
-              onImport={(imported) => {
-                saveSchools(imported);
-              }}
-              onReset={() => {
-                const seed = getInitialSchools();
-                saveSchools(seed);
-                saveCustomDatabase({});
+              onImport={handleBulkReplaceSchools}
+              onReset={async () => {
+                await handleBulkReplaceSchools([]);
+                await saveCustomDatabase({});
               }}
             />
           )}

@@ -23,7 +23,7 @@ import {
   Trash2,
   X
 } from 'lucide-react';
-import { generateWhatsAppLink, extractPhoneNumber } from '../lib/phoneUtils';
+import { generateWhatsAppLink, extractPhoneNumber, formatIndonesianDate } from '../lib/phoneUtils';
 
 interface SchoolListProps {
   schools: SchoolRecord[];
@@ -643,7 +643,7 @@ export default function SchoolList({
       kontakPic2: '',
       kontakPic3: '',
       kontakPic4: '',
-      tanggalKontakAwal: new Date().toLocaleDateString('id-ID'),
+      tanggalKontakAwal: new Date().toISOString().slice(0, 10),
       jenisLayanan: '',
       catatanAwal: '',
       tanggalFollowUpTerakhir: '',
@@ -1631,7 +1631,7 @@ export default function SchoolList({
                 {/* Card Footer: Quick Contacts & Date */}
                 <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-semibold">
                   <span>
-                    {school.tanggalFollowUpTerakhir ? `F/U: ${school.tanggalFollowUpTerakhir}` : school.tanggalKontakAwal ? `Awal: ${school.tanggalKontakAwal}` : 'Belum kontak'}
+                    {school.tanggalFollowUpTerakhir ? `F/U: ${formatIndonesianDate(school.tanggalFollowUpTerakhir)}` : school.tanggalKontakAwal ? `Awal: ${formatIndonesianDate(school.tanggalKontakAwal)}` : 'Belum kontak'}
                   </span>
 
                   <div className="flex space-x-1.5" onClick={(e) => e.stopPropagation()}>
