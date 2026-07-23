@@ -17,7 +17,14 @@ async function startServer() {
     throw new Error("JWT_SECRET environment variable is required");
   }
 
-  app.use(helmet());
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "img-src": ["'self'", "data:", "https:"],
+      },
+    },
+  }));
   app.use(express.json());
 
   // Database configuration
@@ -332,13 +339,13 @@ async function startServer() {
         const formatted = result.rows.map(row => ({
           no: row.no,
           namaSekolah: row.nama_sekolah,
-          originalName: row.original_name,
-          provinsi: row.provinsi,
-          kota: row.kota,
-          instagramHandle: row.instagram_handle,
-          tiktokHandle: row.tiktok_handle,
-          picMarketing: row.pic_marketing,
-          marketingLapangan: row.marketing_lapangan,
+          originalName: row.original_name || '',
+          provinsi: row.provinsi || '',
+          kota: row.kota || '',
+          instagramHandle: row.instagram_handle || '',
+          tiktokHandle: row.tiktok_handle || '',
+          picMarketing: row.pic_marketing || '',
+          marketingLapangan: row.marketing_lapangan || '',
           status: row.status,
           kontakPic1: row.kontak_pic1 || '',
           kontakPic2: row.kontak_pic2 || '',
