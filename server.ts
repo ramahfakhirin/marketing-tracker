@@ -294,26 +294,33 @@ async function startServer() {
     }
   });
 
-  // RESET team members (Keep superadmin only) (SUPERADMIN only)
+  // RESET team members (keeps every existing SUPERADMIN account, removes everyone else) (SUPERADMIN only)
   app.post("/api/team/reset", requireAuth, requireRole('SUPERADMIN'), async (req, res) => {
-    const hashedDefault = await bcrypt.hash('admin123', SALT_ROUNDS);
-    const superAdminObj = { id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin' };
-
     if (usePostgres && pool) {
       try {
-        await pool.query("DELETE FROM team WHERE id != 'admin-1' AND LOWER(username) != 'superadmin';");
-        await pool.query(
-          "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name=$2, role=$3, username=$4;",
-          [superAdminObj.id, superAdminObj.name, superAdminObj.role, superAdminObj.username, hashedDefault]
-        );
-        return res.json({ success: true, message: "Database tim berhasil di-reset. Tersisa Super Admin.", team: [superAdminObj] });
+        await pool.query("DELETE FROM team WHERE role != 'SUPERADMIN';");
+        const remaining = await pool.query("SELECT COUNT(*) FROM team;");
+        if (parseInt(remaining.rows[0].count) === 0) {
+          const hashedDefault = await bcrypt.hash('admin123', SALT_ROUNDS);
+          await pool.query(
+            "INSERT INTO team (id, name, role, username, password) VALUES ($1, $2, $3, $4, $5);",
+            ['admin-1', 'Super Admin', 'SUPERADMIN', 'superadmin', hashedDefault]
+          );
+        }
+        const result = await pool.query("SELECT id, name, role, username FROM team ORDER BY name ASC;");
+        return res.json({ success: true, message: "Database tim berhasil di-reset. Akun Super Admin tetap dipertahankan.", team: result.rows });
       } catch (err) {
         console.error("Failed to reset team in Postgres", err);
         return res.status(500).json({ error: "Gagal me-reset database tim" });
       }
     } else {
-      inMemoryTeam = [{ ...superAdminObj, password: hashedDefault }];
-      return res.json({ success: true, message: "Database tim berhasil di-reset. Tersisa Super Admin.", team: [superAdminObj] });
+      inMemoryTeam = inMemoryTeam.filter(t => t.role === 'SUPERADMIN');
+      if (inMemoryTeam.length === 0) {
+        const hashedDefault = await bcrypt.hash('admin123', SALT_ROUNDS);
+        inMemoryTeam = [{ id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin', password: hashedDefault }];
+      }
+      const team = inMemoryTeam.map(({ password, ...rest }) => rest);
+      return res.json({ success: true, message: "Database tim berhasil di-reset. Akun Super Admin tetap dipertahankan.", team });
     }
   });
 
@@ -354,17 +361,48 @@ async function startServer() {
     }
   });
 
+  // Marketing Lapangan may only touch: marketingLapangan, kontakPic1-4, updates.
+  // For a brand new school they may also set the core identity fields, but never status/picMarketing.
+  function applyMarketingLapanganRestrictions(school: any, existingRow: any | null) {
+    if (existingRow) {
+      school.namaSekolah = existingRow.nama_sekolah;
+      school.originalName = existingRow.original_name;
+      school.provinsi = existingRow.provinsi;
+      school.kota = existingRow.kota;
+      school.instagramHandle = existingRow.instagram_handle;
+      school.tiktokHandle = existingRow.tiktok_handle;
+      school.jenisLayanan = existingRow.jenis_layanan;
+      school.catatanAwal = existingRow.catatan_awal;
+      school.tanggalKontakAwal = existingRow.tanggal_kontak_awal;
+      school.tanggalFollowUpTerakhir = existingRow.tanggal_follow_up_terakhir;
+      school.kemungkinanClosing = existingRow.kemungkinan_closing;
+      school.status = existingRow.status;
+      school.picMarketing = existingRow.pic_marketing;
+    } else {
+      school.status = 'BARU';
+      school.picMarketing = '';
+    }
+    return school;
+  }
+
   // SAVE or UPDATE a school
   app.post("/api/schools", requireAuth, async (req, res) => {
-    const school = req.body;
+    let school = req.body;
     if (!school.namaSekolah) {
       return res.status(400).json({ error: "Nama sekolah wajib diisi" });
     }
+    const role = (req as any).user.role;
 
     if (usePostgres && pool) {
       try {
-        const existsResult = await pool.query("SELECT no FROM schools WHERE no = $1;", [school.no]);
-        const exists = existsResult.rows.length > 0;
+        const existsResult = await pool.query("SELECT * FROM schools WHERE no = $1;", [school.no]);
+        const existingRow = existsResult.rows[0] || null;
+        const exists = !!existingRow;
+
+        if (role === 'MARKETING_LAPANGAN') {
+          school = applyMarketingLapanganRestrictions(school, existingRow);
+        }
+
         const updatesJson = JSON.stringify(school.updates || []);
 
         if (exists) {
@@ -410,6 +448,15 @@ async function startServer() {
       }
     } else {
       const idx = inMemorySchools.findIndex(s => s.no === school.no);
+      if (role === 'MARKETING_LAPANGAN') {
+        const existing = idx !== -1 ? inMemorySchools[idx] : null;
+        if (existing) {
+          school = { ...existing, marketingLapangan: school.marketingLapangan, kontakPic1: school.kontakPic1, kontakPic2: school.kontakPic2, kontakPic3: school.kontakPic3, kontakPic4: school.kontakPic4, updates: school.updates };
+        } else {
+          school.status = 'BARU';
+          school.picMarketing = '';
+        }
+      }
       if (idx !== -1) {
         inMemorySchools[idx] = school;
       } else {
@@ -421,8 +468,8 @@ async function startServer() {
     }
   });
 
-  // BULK REPLACE all schools (used by CSV import and full database reset)
-  app.post("/api/schools/bulk-replace", requireAuth, async (req, res) => {
+  // BULK REPLACE all schools (used by CSV import and full database reset) - same access as the Sync tab
+  app.post("/api/schools/bulk-replace", requireAuth, requireRole('SUPERADMIN', 'MANAGER', 'AE'), async (req, res) => {
     const incoming: any[] = Array.isArray(req.body) ? req.body : [];
 
     if (usePostgres && pool) {

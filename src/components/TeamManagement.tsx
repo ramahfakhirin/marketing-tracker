@@ -288,7 +288,7 @@ export default function TeamManagement({
                 {isSuperAdmin && onResetTeam && (
                   <button
                     onClick={() => {
-                      if (confirm("PERINGATAN: Apakah Anda yakin ingin mereset database tim marketing?\nSemua akun tim (AE, Marketing Lapangan, Manager) akan dihapus, dan HANYA Super Admin (superadmin / admin123) yang akan disisakan.")) {
+                      if (confirm("PERINGATAN: Apakah Anda yakin ingin mereset database tim marketing?\nSemua akun tim (AE, Marketing Lapangan, Manager) akan dihapus. Semua akun Super Admin yang ada akan tetap dipertahankan (password tidak berubah).")) {
                         onResetTeam();
                       }
                     }}
