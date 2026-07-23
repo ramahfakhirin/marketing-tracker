@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember } from '../types';
 import { SURVEYED_DATABASE } from '../data/surveyedSchools';
+import { INDONESIAN_PROVINCES_DATA } from '../data/indonesiaData';
 import { 
   X, 
-  Image, 
+  Instagram, 
   Phone, 
   MessageSquare, 
   Save, 
@@ -21,6 +22,14 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { generateWhatsAppLink, extractPhoneNumber } from '../lib/phoneUtils';
+
+const SERVICE_OPTIONS = [
+  'Buku Tahunan',
+  'Foto Graduasi / Wisuda',
+  'Video Company Profile',
+  'Event Dokumentasi',
+  'Merchandise & Printing'
+];
 
 interface SchoolDetailModalProps {
   school: SchoolRecord | null;
@@ -142,6 +151,55 @@ export default function SchoolDetailModal({
       setNewUpdateText('');
     }
   }, [school, currentUser]);
+
+  // Dynamic Province & City Options combining pre-surveyed DB and standard Indonesian data
+  const provinceOptions = useMemo(() => {
+    const mergedKeys = Object.keys(mergedDatabase || {});
+    const dataKeys = Object.keys(INDONESIAN_PROVINCES_DATA || {});
+    const set = new Set([...mergedKeys, ...dataKeys]);
+    if (provinsi && !set.has(provinsi)) set.add(provinsi);
+    return Array.from(set).sort();
+  }, [mergedDatabase, provinsi]);
+
+  const cityOptions = useMemo(() => {
+    if (!provinsi) return [];
+    const upperP = provinsi.toUpperCase().trim();
+    const dataCities = INDONESIAN_PROVINCES_DATA[upperP] || [];
+    const mergedCities = Object.keys((mergedDatabase || {})[provinsi] || (mergedDatabase || {})[upperP] || {});
+    const set = new Set([...dataCities, ...mergedCities]);
+    if (kota && !set.has(kota)) set.add(kota);
+    return Array.from(set).sort();
+  }, [mergedDatabase, provinsi, kota]);
+
+  // Service options multi-select helper
+  const isServiceSelected = (svc: string) => {
+    if (!jenisLayanan) return false;
+    return jenisLayanan.toLowerCase().includes(svc.toLowerCase());
+  };
+
+  const toggleService = (svc: string) => {
+    let currentList = jenisLayanan ? jenisLayanan.split(',').map(s => s.trim()).filter(Boolean) : [];
+    if (isServiceSelected(svc)) {
+      currentList = currentList.filter(s => s.toLowerCase() !== svc.toLowerCase());
+    } else {
+      currentList.push(svc);
+    }
+    setJenisLayanan(currentList.join(', '));
+  };
+
+  // Convert string/date to YYYY-MM-DD for <input type="date">
+  const toInputDateValue = (str: string) => {
+    if (!str) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return str;
+  };
 
   if (school === undefined) return null; // Only render when triggered
 
@@ -267,7 +325,7 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                     rel="noopener noreferrer"
                     className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-extrabold uppercase tracking-wider rounded-xl flex items-center space-x-1.5 transition-all shadow-2xs"
                   >
-                    <Image className="h-3.5 w-3.5" />
+                    <Instagram className="h-3.5 w-3.5" />
                     <span>Kirim DM Instagram</span>
                   </a>
                 )}
@@ -324,39 +382,59 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                 >
                   <option value="">-- Pilih Provinsi --</option>
-                  {Object.keys(mergedDatabase).sort().map((provName) => (
+                  {provinceOptions.map((provName) => (
                     <option key={provName} value={provName}>{provName}</option>
                   ))}
+                  <option value="__custom_prov__">+ Ketik Provinsi Manual...</option>
                 </select>
+
+                {provinsi === '__custom_prov__' && (
+                  <input
+                    type="text"
+                    placeholder="Masukkan Nama Provinsi..."
+                    disabled={disableCoreFields}
+                    onChange={(e) => setProvinsi(e.target.value.toUpperCase())}
+                    className="mt-2 w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-800 text-xs font-semibold focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                )}
               </div>
 
               {/* Kota / Kabupaten */}
-              {provinsi && (
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center">
-                    <MapPin className="h-3 w-3 mr-1 text-slate-400" /> Kota / Kabupaten
-                  </label>
-                  <select
-                    id="modal-school-city"
-                    value={kota}
+              <div>
+                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center">
+                  <MapPin className="h-3 w-3 mr-1 text-slate-400" /> Kota / Kabupaten
+                </label>
+                <select
+                  id="modal-school-city"
+                  value={kota}
+                  disabled={disableCoreFields}
+                  onChange={(e) => {
+                    const newCity = e.target.value;
+                    setKota(newCity);
+                    setNamaSekolah('');
+                  }}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                >
+                  <option value="">-- Pilih Kota / Kabupaten --</option>
+                  {cityOptions.map((cityName) => (
+                    <option key={cityName} value={cityName}>{cityName}</option>
+                  ))}
+                  <option value="__custom_city__">+ Ketik Kota/Kabupaten Manual...</option>
+                </select>
+
+                {kota === '__custom_city__' && (
+                  <input
+                    type="text"
+                    placeholder="Masukkan Nama Kota / Kabupaten..."
                     disabled={disableCoreFields}
-                    onChange={(e) => {
-                      const newCity = e.target.value;
-                      setKota(newCity);
-                      setNamaSekolah('');
-                    }}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                  >
-                    <option value="">-- Pilih Kota / Kabupaten --</option>
-                    {Object.keys(mergedDatabase[provinsi] || {}).sort().map((cityName) => (
-                      <option key={cityName} value={cityName}>{cityName}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+                    onChange={(e) => setKota(e.target.value.toUpperCase())}
+                    className="mt-2 w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-800 text-xs font-semibold focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                )}
+              </div>
 
               {/* Pilih Nama Sekolah (Pre-surveyed) */}
-              {provinsi && kota && (
+              {provinsi && kota && provinsi !== '__custom_prov__' && kota !== '__custom_city__' && (
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">
                     Pilih Sekolah Hasil Survey ({kota})
@@ -475,16 +553,39 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                 </div>
               </div>
 
-              {/* Layanan Ditawarkan */}
-              <div>
-                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Layanan Ditawarkan</label>
+              {/* Layanan Ditawarkan - Multi-select radio/button toggles */}
+              <div className="space-y-2">
+                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Layanan Ditawarkan (Dapat Pilih Beberapa)</span>
+                </label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {SERVICE_OPTIONS.map((svc) => {
+                    const active = isServiceSelected(svc);
+                    return (
+                      <button
+                        key={svc}
+                        type="button"
+                        disabled={disableSecondaryFields}
+                        onClick={() => toggleService(svc)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                          active 
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs' 
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {active ? <Check className="h-3.5 w-3.5 stroke-[3]" /> : <Plus className="h-3.5 w-3.5 opacity-60" />}
+                        {svc}
+                      </button>
+                    );
+                  })}
+                </div>
                 <input
                   type="text"
                   id="modal-jenis-layanan"
                   value={jenisLayanan}
                   disabled={disableSecondaryFields}
                   onChange={(e) => setJenisLayanan(e.target.value)}
-                  placeholder="Buku Tahunan / Event / Lainnya"
+                  placeholder="Atau ketik detail layanan manual..."
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                 />
               </div>
@@ -531,29 +632,31 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
               <div className="grid grid-cols-2 gap-4">
                 {/* Initial Contact Date */}
                 <div>
-                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Tanggal Kontak Awal</label>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                    <Calendar className="h-3 w-3 text-indigo-500" /> Tanggal Kontak Awal
+                  </label>
                   <input
-                    type="text"
+                    type="date"
                     id="modal-tanggal-kontak-awal"
-                    value={tanggalKontakAwal}
+                    value={toInputDateValue(tanggalKontakAwal)}
                     disabled={disableSecondaryFields}
                     onChange={(e) => setTanggalKontakAwal(e.target.value)}
-                    placeholder="Contoh: 1 April 2026"
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed cursor-pointer"
                   />
                 </div>
 
                 {/* Last Follow Up Date */}
                 <div>
-                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Terakhir Follow Up</label>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                    <Calendar className="h-3 w-3 text-amber-500" /> Terakhir Follow Up
+                  </label>
                   <input
-                    type="text"
+                    type="date"
                     id="modal-tanggal-follow-up"
-                    value={tanggalFollowUpTerakhir}
+                    value={toInputDateValue(tanggalFollowUpTerakhir)}
                     disabled={disableSecondaryFields}
                     onChange={(e) => setTanggalFollowUpTerakhir(e.target.value)}
-                    placeholder="Contoh: 20 April 2026"
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed cursor-pointer"
                   />
                 </div>
               </div>

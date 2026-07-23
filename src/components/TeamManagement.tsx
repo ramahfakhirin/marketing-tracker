@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { TeamMember, SchoolRecord, UserRole } from '../types';
-import { Users, UserPlus, Trash2, Shield, Search, Briefcase, UserCheck, Key, Info, ShieldAlert } from 'lucide-react';
+import { Users, UserPlus, Trash2, Shield, Search, Briefcase, UserCheck, Key, Info, ShieldAlert, RefreshCw } from 'lucide-react';
 
 interface TeamManagementProps {
   teamMembers: TeamMember[];
   schools: SchoolRecord[];
   onAddMember: (name: string, role: UserRole, username: string, password?: string) => void;
   onDeleteMember: (id: string) => void;
+  onResetTeam?: () => void;
   currentUser: TeamMember;
 }
 
@@ -15,6 +16,7 @@ export default function TeamManagement({
   schools,
   onAddMember,
   onDeleteMember,
+  onResetTeam,
   currentUser,
 }: TeamManagementProps) {
   const [nameInput, setNameInput] = useState('');
@@ -90,7 +92,7 @@ export default function TeamManagement({
   // Calculate stats for each member
   const getAssignedCount = (member: TeamMember) => {
     if (member.role === 'AE') {
-      return schools.filter((s) => (s.picMarketing || '').toLowerCase() === member.name.toLowerCase()).length;
+      return schools.filter((s) => s.picMarketing.toLowerCase() === member.name.toLowerCase()).length;
     } else if (member.role === 'MARKETING_LAPANGAN') {
       return schools.filter((s) => s.marketingLapangan?.toLowerCase() === member.name.toLowerCase()).length;
     }
@@ -272,9 +274,25 @@ export default function TeamManagement({
         <div className="lg:col-span-2" id="team-list-card">
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center">
-              <h4 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider">
-                Daftar Akun Tim ({filteredMembers.length})
-              </h4>
+              <div className="flex items-center gap-3">
+                <h4 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider">
+                  Daftar Akun Tim ({filteredMembers.length})
+                </h4>
+                {isSuperAdmin && onResetTeam && (
+                  <button
+                    onClick={() => {
+                      if (confirm("PERINGATAN: Apakah Anda yakin ingin mereset database tim marketing?\nSemua akun tim (AE, Marketing Lapangan, Manager) akan dihapus, dan HANYA Super Admin (superadmin / admin123) yang akan disisakan.")) {
+                        onResetTeam();
+                      }
+                    }}
+                    title="Reset Database Tim (Sisakan Super Admin)"
+                    className="flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    <span>Reset Tim (Sisa Super Admin)</span>
+                  </button>
+                )}
+              </div>
               
               {/* Quick Filters */}
               <div className="flex gap-1.5 w-full sm:w-auto overflow-x-auto no-scrollbar py-1">
@@ -380,6 +398,8 @@ export default function TeamManagement({
                           <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-400 font-medium font-mono">
                             <Key className="h-2.5 w-2.5 shrink-0" />
                             <span className="truncate">@{member.username}</span>
+                            <span className="text-[9px] text-slate-300">|</span>
+                            <span>pass: {member.password || 'password123'}</span>
                           </div>
 
                           <div className="flex items-center space-x-1.5 mt-2">

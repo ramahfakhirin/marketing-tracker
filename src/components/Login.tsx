@@ -4,40 +4,37 @@ import { Lock, User, Briefcase, KeyRound, AlertCircle, Sparkles } from 'lucide-r
 
 interface LoginProps {
   teamMembers: TeamMember[];
-  onLogin: (user: TeamMember) => void;
+  onLogin: (user: TeamMember | { username: string; password?: string }) => void;
 }
 
 export default function Login({ teamMembers, onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!username.trim() || !password.trim()) {
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    if (!cleanUsername || !cleanPassword) {
       setError('Username dan Password wajib diisi!');
       return;
     }
 
-    // Find user in registered team list
-    const foundUser = teamMembers.find(
-      (u) => u.username.toLowerCase() === username.trim().toLowerCase()
-    );
+    setLoading(true);
 
-    if (!foundUser) {
-      setError('Username tidak terdaftar!');
-      return;
+    try {
+      // Pass credentials to parent handler (App.tsx) which performs server authentication or fallback
+      await onLogin({ username: cleanUsername, password: cleanPassword });
+    } catch (err: any) {
+      setError(err?.message || 'Login gagal! Periksa username dan password.');
+    } finally {
+      setLoading(false);
     }
-
-    if (foundUser.password !== password) {
-      setError('Password salah! Coba lagi.');
-      return;
-    }
-
-    // Login successful
-    onLogin(foundUser);
   };
 
   // Helper for quick click login

@@ -5,7 +5,7 @@ import {
   Search, 
   Filter, 
   SlidersHorizontal, 
-  Image, 
+  Instagram, 
   Phone, 
   ChevronLeft, 
   ChevronRight, 
@@ -354,51 +354,74 @@ export default function SchoolList({
 
   // --- DATABASE MODE LOGIC ---
   const databaseSchools = useMemo(() => {
-    if (!selectedProvince || !selectedCity) {
+    const searchLower = search.toLowerCase().trim();
+
+    let surveyedListWithRegion: Array<{
+      surveyed: { name: string; instagram?: string; tiktok?: string };
+      prov: string;
+      city: string;
+    }> = [];
+
+    if (selectedProvince && selectedCity) {
+      const upperProv = selectedProvince.toUpperCase().trim();
+      const upperCity = selectedCity.toUpperCase().trim();
+      const surveyed = mergedDatabase[upperProv]?.[upperCity] || [];
+      surveyedListWithRegion = surveyed.map(s => ({ surveyed: s, prov: upperProv, city: upperCity }));
+    } else if (searchLower) {
+      // Search across ALL regions in mergedDatabase if no specific region is selected
+      Object.entries(mergedDatabase).forEach(([pName, cityObj]) => {
+        Object.entries(cityObj).forEach(([cName, schList]) => {
+          schList.forEach(s => {
+            surveyedListWithRegion.push({ surveyed: s, prov: pName, city: cName });
+          });
+        });
+      });
+    } else {
       return [];
     }
 
-    const upperProv = selectedProvince.toUpperCase().trim();
-    const upperCity = selectedCity.toUpperCase().trim();
-
-    const surveyedList = mergedDatabase[upperProv]?.[upperCity] || [];
-    const searchLower = search.toLowerCase();
-
-    // Find active prospects in the current province and city
-    const activeProspectsInRegion = schools.filter(s =>
-      s.provinsi?.toUpperCase().trim() === upperProv &&
-      s.kota?.toUpperCase().trim() === upperCity
-    );
+    // Active prospects in the scoped region(s) or all if search is global
+    const activeProspects = (selectedProvince && selectedCity)
+      ? schools.filter(s =>
+          s.provinsi?.toUpperCase().trim() === selectedProvince.toUpperCase().trim() &&
+          s.kota?.toUpperCase().trim() === selectedCity.toUpperCase().trim()
+        )
+      : schools;
 
     // Map surveyed schools and join with active prospect records
-    const mapped = surveyedList.map((sch) => {
-      const activeRecord = activeProspectsInRegion.find(s => 
-        (s.originalName && s.originalName.toLowerCase().trim() === sch.name.toLowerCase().trim()) ||
-        s.namaSekolah.toLowerCase().trim() === sch.name.toLowerCase().trim()
+    const mapped = surveyedListWithRegion.map(({ surveyed, prov, city }) => {
+      const activeRecord = activeProspects.find(s => 
+        ((!selectedProvince || s.provinsi?.toUpperCase().trim() === prov) && (!selectedCity || s.kota?.toUpperCase().trim() === city)) &&
+        ((s.originalName && s.originalName.toLowerCase().trim() === surveyed.name.toLowerCase().trim()) ||
+         (s.namaSekolah && s.namaSekolah.toLowerCase().trim() === surveyed.name.toLowerCase().trim()))
       );
 
       return {
-        surveyed: sch,
+        surveyed,
+        prov,
+        city,
         active: activeRecord || null,
         isMatched: !!activeRecord
       };
     });
 
-    // Also, find active prospects that are NOT in the surveyed list and append them!
-    const surveyedNames = new Set(surveyedList.map(s => s.name.toLowerCase().trim()));
-    activeProspectsInRegion.forEach((s) => {
-      const originalNameLower = s.originalName?.toLowerCase().trim();
-      const namaSekolahLower = s.namaSekolah.toLowerCase().trim();
-      const hasOriginalMatch = originalNameLower && surveyedNames.has(originalNameLower);
-      const hasNameMatch = surveyedNames.has(namaSekolahLower);
+    // Also, find active prospects that are NOT in the surveyed list and append them
+    const surveyedKeys = new Set(surveyedListWithRegion.map(item => `${item.prov}_${item.city}_${item.surveyed.name.toLowerCase().trim()}`));
+    activeProspects.forEach((s) => {
+      const prov = s.provinsi?.toUpperCase().trim() || '';
+      const city = s.kota?.toUpperCase().trim() || '';
+      const keyOriginal = `${prov}_${city}_${s.originalName?.toLowerCase().trim()}`;
+      const keyName = `${prov}_${city}_${s.namaSekolah?.toLowerCase().trim()}`;
 
-      if (!hasOriginalMatch && !hasNameMatch) {
+      if (!surveyedKeys.has(keyOriginal) && !surveyedKeys.has(keyName)) {
         mapped.push({
           surveyed: {
             name: s.namaSekolah,
             instagram: s.instagramHandle,
             tiktok: s.tiktokHandle
           },
+          prov,
+          city,
           active: s,
           isMatched: true
         });
@@ -409,21 +432,33 @@ export default function SchoolList({
     return mapped.filter(item => {
       // 1. Search Filter
       if (searchLower) {
-        const nameMatch = item.surveyed.name.toLowerCase().includes(searchLower);
-        const igMatch = item.surveyed.instagram ? item.surveyed.instagram.toLowerCase().includes(searchLower) : false;
+        const nameMatch = (item.surveyed.name || '').toLowerCase().includes(searchLower);
+        const igMatch = (item.surveyed.instagram || '').toLowerCase().includes(searchLower);
+        const tiktokMatch = (item.surveyed.tiktok || '').toLowerCase().includes(searchLower);
+        const cityMatch = (item.city || '').toLowerCase().includes(searchLower);
+        const provMatch = (item.prov || '').toLowerCase().includes(searchLower);
         
         let activeMatch = false;
         if (item.active) {
-          activeMatch = item.active.picMarketing.toLowerCase().includes(searchLower) ||
-            item.active.catatanAwal.toLowerCase().includes(searchLower);
+          activeMatch = 
+            (item.active.namaSekolah || '').toLowerCase().includes(searchLower) ||
+            (item.active.picMarketing || '').toLowerCase().includes(searchLower) ||
+            (item.active.marketingLapangan || '').toLowerCase().includes(searchLower) ||
+            (item.active.catatanAwal || '').toLowerCase().includes(searchLower) ||
+            (item.active.instagramHandle || '').toLowerCase().includes(searchLower) ||
+            (item.active.tiktokHandle || '').toLowerCase().includes(searchLower) ||
+            (item.active.kontakPic1 || '').toLowerCase().includes(searchLower) ||
+            (item.active.kontakPic2 || '').toLowerCase().includes(searchLower) ||
+            (item.active.kontakPic3 || '').toLowerCase().includes(searchLower) ||
+            (item.active.kontakPic4 || '').toLowerCase().includes(searchLower);
         }
 
-        if (!nameMatch && !igMatch && !activeMatch) return false;
+        if (!nameMatch && !igMatch && !tiktokMatch && !cityMatch && !provMatch && !activeMatch) return false;
       }
 
       // 2. Jenjang Filter
       if (levelFilter !== 'ALL') {
-        const nameUpper = item.surveyed.name.toUpperCase();
+        const nameUpper = (item.surveyed.name || '').toUpperCase();
         if (levelFilter === 'SMA') {
           if (!nameUpper.includes('SMA') && !nameUpper.includes('MA ')) return false;
         } else if (levelFilter === 'SMK') {
@@ -491,28 +526,31 @@ export default function SchoolList({
   // --- PROSPECT MODE LOGIC (Active Leads Flat List) ---
   const activeFilteredSchools = useMemo(() => {
     return schools.filter((school) => {
-      // Only include schools that have reached the prospect stage!
-      const isProspectStage = ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(school.status);
+      // Include schools that are active or in prospect stage
+      const isProspectStage = ['BARU', 'DIHUBUNGI', 'FOLLOW UP', 'PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED', 'LOST'].includes(school.status);
       if (!isProspectStage) {
         return false;
       }
 
       // 1. Text Search
-      const searchLower = search.toLowerCase();
-      const nameMatch = school.namaSekolah.toLowerCase().includes(searchLower);
-      const cityMatch = school.kota ? school.kota.toLowerCase().includes(searchLower) : false;
-      const igMatch = school.instagramHandle ? school.instagramHandle.toLowerCase().includes(searchLower) : false;
-      const tiktokMatch = school.tiktokHandle ? school.tiktokHandle.toLowerCase().includes(searchLower) : false;
-      const picMatch = school.picMarketing ? school.picMarketing.toLowerCase().includes(searchLower) : false;
-      const mlMatch = school.marketingLapangan ? school.marketingLapangan.toLowerCase().includes(searchLower) : false;
-      const contactMatch = (school.kontakPic1 + school.kontakPic2 + school.kontakPic3 + school.kontakPic4)
-        .toLowerCase()
-        .includes(searchLower);
-      const notesMatch = school.catatanAwal.toLowerCase().includes(searchLower) || 
-        (school.updates && school.updates.some(u => u.toLowerCase().includes(searchLower)));
+      if (search.trim()) {
+        const searchLower = search.toLowerCase().trim();
+        const nameMatch = (school.namaSekolah || '').toLowerCase().includes(searchLower);
+        const cityMatch = (school.kota || '').toLowerCase().includes(searchLower);
+        const provMatch = (school.provinsi || '').toLowerCase().includes(searchLower);
+        const igMatch = (school.instagramHandle || '').toLowerCase().includes(searchLower);
+        const tiktokMatch = (school.tiktokHandle || '').toLowerCase().includes(searchLower);
+        const picMatch = (school.picMarketing || '').toLowerCase().includes(searchLower);
+        const mlMatch = (school.marketingLapangan || '').toLowerCase().includes(searchLower);
+        const contactMatch = ((school.kontakPic1 || '') + (school.kontakPic2 || '') + (school.kontakPic3 || '') + (school.kontakPic4 || ''))
+          .toLowerCase()
+          .includes(searchLower);
+        const notesMatch = (school.catatanAwal || '').toLowerCase().includes(searchLower) || 
+          (school.updates && school.updates.some(u => (u || '').toLowerCase().includes(searchLower)));
 
-      if (search && !nameMatch && !cityMatch && !igMatch && !tiktokMatch && !picMatch && !mlMatch && !contactMatch && !notesMatch) {
-        return false;
+        if (!nameMatch && !cityMatch && !provMatch && !igMatch && !tiktokMatch && !picMatch && !mlMatch && !contactMatch && !notesMatch) {
+          return false;
+        }
       }
 
       // 2. Status Filter
@@ -538,7 +576,7 @@ export default function SchoolList({
 
       // 5. School Level Filter
       if (levelFilter !== 'ALL') {
-        const nameUpper = school.namaSekolah.toUpperCase();
+        const nameUpper = (school.namaSekolah || '').toUpperCase();
         if (levelFilter === 'SMA') {
           if (!nameUpper.includes('SMA') && !nameUpper.includes('MA ')) return false;
         } else if (levelFilter === 'SMK') {
@@ -1333,7 +1371,7 @@ export default function SchoolList({
       </div>
 
       {/* Main Grid: Shows pre-surveyed target database OR flat active prospects list */}
-      {viewMode === 'database' && (!selectedProvince || !selectedCity) ? (
+      {viewMode === 'database' && (!selectedProvince || !selectedCity) && !search.trim() ? (
         <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-12 text-center space-y-4 shadow-2xs">
           <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto border border-indigo-100">
             <MapPin className="h-6 w-6" />
@@ -1403,7 +1441,7 @@ export default function SchoolList({
                         rel="noopener noreferrer"
                         className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
                       >
-                        <Image className="h-3.5 w-3.5" />
+                        <Instagram className="h-3.5 w-3.5" />
                         <span>{sch.instagram}</span>
                         <ExternalLink className="h-2.5 w-2.5" />
                       </a>
@@ -1522,7 +1560,7 @@ export default function SchoolList({
                         onClick={(e) => e.stopPropagation()}
                         className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
                       >
-                        <Image className="h-3.5 w-3.5" />
+                        <Instagram className="h-3.5 w-3.5" />
                         <span>{school.instagramHandle}</span>
                         <ExternalLink className="h-2.5 w-2.5" />
                       </a>
