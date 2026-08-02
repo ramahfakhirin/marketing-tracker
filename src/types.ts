@@ -3,6 +3,18 @@ export type ClosingProbability = 'LOW' | 'MEDIUM' | 'HIGH' | '';
 
 export type UserRole = 'SUPERADMIN' | 'MANAGER' | 'AE' | 'MARKETING_LAPANGAN';
 
+export type AcademicYearStatus = 'AKTIF' | 'MENDATANG' | 'ARSIP';
+
+export interface AcademicYear {
+  id: string;
+  yearName: string; // e.g. "2026/2027"
+  title: string; // e.g. "Tahun Ajaran 2026/2027"
+  startDate: string; // e.g. "1 Jul 2026"
+  endDate: string; // e.g. "30 Jun 2027"
+  status: AcademicYearStatus; // 'AKTIF' | 'MENDATANG' | 'ARSIP'
+  note?: string; // e.g. "Periode Berjalan Utama (Aktif)"
+}
+
 export interface SchoolRecord {
   no: number;
   namaSekolah: string;
@@ -24,6 +36,7 @@ export interface SchoolRecord {
   tanggalFollowUpTerakhir: string;
   kemungkinanClosing: ClosingProbability;
   updates: string[]; // List of updates (UPDATE 1 to UPDATE 7 and more)
+  periode?: string; // Academic Year period e.g. "2026/2027"
 }
 
 export interface TeamMember {

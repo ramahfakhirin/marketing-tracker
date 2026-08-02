@@ -1,26 +1,22 @@
 export function extractPhoneNumber(text: string): string | null {
   if (!text) return null;
-
-  // Look for a sequence starting with +62/62/08, allowing space/hyphen/dot/slash separators
-  let match = text.match(/(?:\+62|62|08)[0-9\s.\-\/]{7,15}/);
-  // Fallback: a bare mobile number starting with 8 but missing the leading 0, e.g. "812-3456-7890"
-  if (!match) {
-    match = text.match(/\b8[0-9\s.\-\/]{7,14}/);
-  }
+  // Look for sequence of digits, spaces, hyphens, pluses
+  const match = text.match(/(?:\+62|62|08)[0-9\s-]{8,15}/);
   if (!match) return null;
-
+  
   // Clean non-digits
   let cleaned = match[0].replace(/[^0-9]/g, '');
-  if (cleaned.length < 9) return null;
-
+  
   // Convert 08... to 628...
   if (cleaned.startsWith('0')) {
     cleaned = '62' + cleaned.substring(1);
-  } else if (cleaned.startsWith('8')) {
-    // Bare local number without country/trunk prefix, e.g. "8123456789"
+  }
+  
+  // If it starts with 8..., assume 628...
+  if (cleaned.startsWith('8') && cleaned.length >= 9 && cleaned.length <= 13) {
     cleaned = '62' + cleaned;
   }
-
+  
   return cleaned;
 }
 

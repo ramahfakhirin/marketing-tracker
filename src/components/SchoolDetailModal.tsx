@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember } from '../types';
 import { SURVEYED_DATABASE } from '../data/surveyedSchools';
-import { INDONESIAN_PROVINCES_DATA } from '../data/indonesiaData';
+import { INDONESIAN_PROVINCES_DATA, formatCityName, isSameCity } from '../data/indonesiaData';
 import { 
   X, 
   Instagram, 
@@ -24,19 +24,23 @@ import {
 import { generateWhatsAppLink, extractPhoneNumber } from '../lib/phoneUtils';
 
 const SERVICE_OPTIONS = [
-  'Buku Tahunan',
-  'Foto Graduasi / Wisuda',
-  'Video Company Profile',
-  'Event Dokumentasi',
-  'Merchandise & Printing'
+  'Yearbook Digital',
+  'Yearbook Cetak',
+  'Video Angkatan',
+  'Event Makrab',
+  'Graduation',
+  'Promnight',
+  'Sesi Foto Only'
 ];
 
 interface SchoolDetailModalProps {
   school: SchoolRecord | null;
   teamMembers?: TeamMember[];
+  academicYears?: string[];
+  defaultPeriode?: string;
   onClose: () => void;
   onSave: (updatedSchool: SchoolRecord) => void;
-  onDelete?: (schoolNo: number) => void;
+  onDelete?: (schoolNo: number, schoolName?: string) => void;
   mergedDatabase?: Record<string, Record<string, any[]>>;
   currentUser: TeamMember;
 }
@@ -44,6 +48,8 @@ interface SchoolDetailModalProps {
 export default function SchoolDetailModal({ 
   school, 
   teamMembers = [], 
+  academicYears = ['2027/2028', '2026/2027', '2025/2026', '2024/2025'],
+  defaultPeriode = '2026/2027',
   onClose, 
   onSave, 
   onDelete,
@@ -56,7 +62,7 @@ export default function SchoolDetailModal({
   const isAE = currentUser.role === 'AE';
   const isMarketingLapangan = currentUser.role === 'MARKETING_LAPANGAN';
 
-  const isNewSchool = !school || school.no === -1;
+  const isNewSchool = !school;
   
   // - Core fields (Provinsi, Kota, Nama Sekolah, Handles)
   //   Can edit if admin/manager/AE OR if it's a new school being scouted on the field
@@ -75,13 +81,20 @@ export default function SchoolDetailModal({
 
   // Local form states
   const [namaSekolah, setNamaSekolah] = useState('');
+  const [isCustomSchoolName, setIsCustomSchoolName] = useState(true);
   const [provinsi, setProvinsi] = useState('');
+  const [isCustomProv, setIsCustomProv] = useState(false);
+  const [customProvInput, setCustomProvInput] = useState('');
   const [kota, setKota] = useState('');
+  const [isCustomCity, setIsCustomCity] = useState(false);
+  const [customCityType, setCustomCityType] = useState<'KOTA' | 'KABUPATEN'>('KOTA');
+  const [customCityInput, setCustomCityInput] = useState('');
   const [instagramHandle, setInstagramHandle] = useState('');
   const [tiktokHandle, setTiktokHandle] = useState('');
   const [picMarketing, setPicMarketing] = useState('');
   const [marketingLapangan, setMarketingLapangan] = useState('');
   const [status, setStatus] = useState<MarketingStatus>('BARU');
+  const [periode, setPeriode] = useState('2026/2027');
   const [kontakPic1, setKontakPic1] = useState('');
   const [kontakPic2, setKontakPic2] = useState('');
   const [kontakPic3, setKontakPic3] = useState('');
@@ -96,13 +109,46 @@ export default function SchoolDetailModal({
   // New single update to push
   const [newUpdateText, setNewUpdateText] = useState('');
   const [isCopied, setIsCopied] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Sync state with selected school
   useEffect(() => {
     if (school) {
       setNamaSekolah(school.namaSekolah || '');
-      setProvinsi(school.provinsi || '');
-      setKota(school.kota || '');
+      setIsCustomSchoolName(true);
+      const p = school.provinsi || '';
+      const k = school.kota || '';
+      setProvinsi(p);
+      setKota(k);
+
+      if (p && !provinceOptions.includes(p)) {
+        setIsCustomProv(true);
+        setCustomProvInput(p);
+      } else {
+        setIsCustomProv(false);
+        setCustomProvInput('');
+      }
+
+      if (k && !cityOptions.includes(k)) {
+        setIsCustomCity(true);
+        if (k.toUpperCase().startsWith('KOTA ')) {
+          setCustomCityType('KOTA');
+          setCustomCityInput(k.substring(5));
+        } else if (k.toUpperCase().startsWith('KABUPATEN ')) {
+          setCustomCityType('KABUPATEN');
+          setCustomCityInput(k.substring(10));
+        } else if (k.toUpperCase().startsWith('KAB ')) {
+          setCustomCityType('KABUPATEN');
+          setCustomCityInput(k.substring(4));
+        } else {
+          setCustomCityType('KOTA');
+          setCustomCityInput(k);
+        }
+      } else {
+        setIsCustomCity(false);
+        setCustomCityInput('');
+      }
+
       setInstagramHandle(school.instagramHandle || '');
       setTiktokHandle(school.tiktokHandle || '');
       setPicMarketing(school.picMarketing || '');
@@ -115,6 +161,7 @@ export default function SchoolDetailModal({
         else initialStatus = school.status;
       }
       setStatus(initialStatus);
+      setPeriode(school.periode || defaultPeriode || '2026/2027');
       setKontakPic1(school.kontakPic1 || '');
       setKontakPic2(school.kontakPic2 || '');
       setKontakPic3(school.kontakPic3 || '');
@@ -129,8 +176,14 @@ export default function SchoolDetailModal({
     } else {
       // Empty template for new schools
       setNamaSekolah('');
+      setIsCustomSchoolName(true);
       setProvinsi('');
+      setIsCustomProv(false);
+      setCustomProvInput('');
       setKota('');
+      setIsCustomCity(false);
+      setCustomCityType('KOTA');
+      setCustomCityInput('');
       setInstagramHandle('');
       setTiktokHandle('');
       // Auto-populate PIC Marketing if user is an AE
@@ -138,11 +191,12 @@ export default function SchoolDetailModal({
       // Auto-populate Marketing Lapangan if user is Marketing Lapangan
       setMarketingLapangan(currentUser.role === 'MARKETING_LAPANGAN' ? currentUser.name : '');
       setStatus('BARU');
+      setPeriode(defaultPeriode || '2026/2027');
       setKontakPic1('');
       setKontakPic2('');
       setKontakPic3('');
       setKontakPic4('');
-      setTanggalKontakAwal(new Date().toISOString().slice(0, 10));
+      setTanggalKontakAwal(new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }));
       setJenisLayanan('');
       setCatatanAwal('');
       setTanggalFollowUpTerakhir('');
@@ -166,9 +220,24 @@ export default function SchoolDetailModal({
     const upperP = provinsi.toUpperCase().trim();
     const dataCities = INDONESIAN_PROVINCES_DATA[upperP] || [];
     const mergedCities = Object.keys((mergedDatabase || {})[provinsi] || (mergedDatabase || {})[upperP] || {});
-    const set = new Set([...dataCities, ...mergedCities]);
-    if (kota && !set.has(kota)) set.add(kota);
-    return Array.from(set).sort();
+    const set = new Set<string>();
+    dataCities.forEach(c => set.add(formatCityName(c, upperP)));
+    mergedCities.forEach(c => set.add(formatCityName(c, upperP)));
+    if (kota) set.add(formatCityName(kota, upperP));
+    return Array.from(set).filter(Boolean).sort();
+  }, [mergedDatabase, provinsi, kota]);
+
+  const surveyedForCurrentCity = useMemo(() => {
+    if (!mergedDatabase || !provinsi || !kota) return [];
+    const upperP = provinsi.toUpperCase().trim();
+    const upperC = kota.toUpperCase().trim();
+    const provData = (mergedDatabase || {})[provinsi] || (mergedDatabase || {})[upperP];
+    if (!provData) return [];
+    if (provData[kota]) return provData[kota];
+    if (provData[upperC]) return provData[upperC];
+    const matchedKey = Object.keys(provData).find(k => isSameCity(k, kota, upperP));
+    if (matchedKey) return provData[matchedKey];
+    return [];
   }, [mergedDatabase, provinsi, kota]);
 
   // Service options multi-select helper
@@ -215,8 +284,13 @@ export default function SchoolDetailModal({
     const nextUpdates = [...updates, formattedUpdate];
     setUpdates(nextUpdates);
     
-    // Automatically update the "Last Follow Up Date" to today (ISO format so it round-trips through <input type="date">)
-    setTanggalFollowUpTerakhir(new Date().toISOString().slice(0, 10));
+    // Automatically update the "Last Follow Up Date" to today
+    const todayStr = new Date().toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+    setTanggalFollowUpTerakhir(todayStr);
     
     // If they write an update, transition status out of BARU automatically!
     if (status === 'BARU') {
@@ -227,20 +301,21 @@ export default function SchoolDetailModal({
   };
 
   const handleSave = () => {
-    if (!namaSekolah.trim()) {
+    const trimmedName = namaSekolah.trim();
+    if (!trimmedName || trimmedName === '__custom__') {
       alert('Nama Sekolah tidak boleh kosong');
       return;
     }
 
     onSave({
-      no: school ? school.no : Date.now(), // Use existing No, or create unique timestamp ID for new ones
-      namaSekolah: namaSekolah.trim(),
-      provinsi: provinsi.trim() || undefined,
-      kota: kota.trim() || undefined,
-      instagramHandle: instagramHandle.trim() || undefined,
-      tiktokHandle: tiktokHandle.trim() || undefined,
+      no: school ? school.no : 0, // 0 triggers backend/App.tsx auto-increment assignment
+      namaSekolah: trimmedName,
+      provinsi: provinsi.trim(),
+      kota: kota.trim(),
+      instagramHandle: instagramHandle.trim(),
+      tiktokHandle: tiktokHandle.trim(),
       picMarketing: picMarketing.trim(),
-      marketingLapangan: marketingLapangan.trim() || undefined,
+      marketingLapangan: marketingLapangan.trim(),
       status,
       kontakPic1: kontakPic1.trim(),
       kontakPic2: kontakPic2.trim(),
@@ -251,7 +326,8 @@ export default function SchoolDetailModal({
       catatanAwal: catatanAwal.trim(),
       tanggalFollowUpTerakhir: tanggalFollowUpTerakhir.trim(),
       kemungkinanClosing,
-      updates,
+      updates: updates || [],
+      periode: periode || defaultPeriode || '2026/2027',
     });
     onClose();
   };
@@ -366,13 +442,20 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                 </label>
                 <select
                   id="modal-school-province"
-                  value={provinsi}
+                  value={isCustomProv ? '__custom_prov__' : provinsi}
                   disabled={disableCoreFields}
                   onChange={(e) => {
-                    const newProv = e.target.value;
-                    setProvinsi(newProv);
+                    const val = e.target.value;
+                    if (val === '__custom_prov__') {
+                      setIsCustomProv(true);
+                      setProvinsi(customProvInput.toUpperCase());
+                    } else {
+                      setIsCustomProv(false);
+                      setProvinsi(val);
+                    }
+                    setIsCustomCity(false);
                     setKota('');
-                    setNamaSekolah('');
+                    setCustomCityInput('');
                   }}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                 >
@@ -383,12 +466,17 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                   <option value="__custom_prov__">+ Ketik Provinsi Manual...</option>
                 </select>
 
-                {provinsi === '__custom_prov__' && (
+                {isCustomProv && (
                   <input
                     type="text"
                     placeholder="Masukkan Nama Provinsi..."
                     disabled={disableCoreFields}
-                    onChange={(e) => setProvinsi(e.target.value.toUpperCase())}
+                    value={customProvInput}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase();
+                      setCustomProvInput(val);
+                      setProvinsi(val);
+                    }}
                     className="mt-2 w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-800 text-xs font-semibold focus:ring-2 focus:ring-indigo-500/20"
                   />
                 )}
@@ -401,12 +489,22 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                 </label>
                 <select
                   id="modal-school-city"
-                  value={kota}
+                  value={isCustomCity ? '__custom_city__' : kota}
                   disabled={disableCoreFields}
                   onChange={(e) => {
-                    const newCity = e.target.value;
-                    setKota(newCity);
-                    setNamaSekolah('');
+                    const val = e.target.value;
+                    if (val === '__custom_city__') {
+                      setIsCustomCity(true);
+                      const prefix = customCityType === 'KOTA' ? 'KOTA ' : 'KABUPATEN ';
+                      let clean = customCityInput.trim();
+                      if (clean.toUpperCase().startsWith('KOTA ')) clean = clean.substring(5);
+                      else if (clean.toUpperCase().startsWith('KABUPATEN ')) clean = clean.substring(10);
+                      else if (clean.toUpperCase().startsWith('KAB ')) clean = clean.substring(4);
+                      setKota(clean ? (prefix + clean).toUpperCase() : '');
+                    } else {
+                      setIsCustomCity(false);
+                      setKota(val);
+                    }
                   }}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                 >
@@ -417,44 +515,111 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                   <option value="__custom_city__">+ Ketik Kota/Kabupaten Manual...</option>
                 </select>
 
-                {kota === '__custom_city__' && (
-                  <input
-                    type="text"
-                    placeholder="Masukkan Nama Kota / Kabupaten..."
-                    disabled={disableCoreFields}
-                    onChange={(e) => setKota(e.target.value.toUpperCase())}
-                    className="mt-2 w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-800 text-xs font-semibold focus:ring-2 focus:ring-indigo-500/20"
-                  />
+                {isCustomCity && (
+                  <div className="mt-2 space-y-2 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">Tipe Wilayah</span>
+                      <div className="flex items-center bg-white p-0.5 rounded-lg border border-slate-200 shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomCityType('KOTA');
+                            let clean = customCityInput.trim();
+                            if (clean.toUpperCase().startsWith('KOTA ')) clean = clean.substring(5);
+                            else if (clean.toUpperCase().startsWith('KABUPATEN ')) clean = clean.substring(10);
+                            else if (clean.toUpperCase().startsWith('KAB ')) clean = clean.substring(4);
+                            setKota(clean ? 'KOTA ' + clean.toUpperCase() : '');
+                          }}
+                          className={`px-3 py-1 text-[10px] font-black rounded-md transition-all cursor-pointer ${
+                            customCityType === 'KOTA'
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          Kota
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomCityType('KABUPATEN');
+                            let clean = customCityInput.trim();
+                            if (clean.toUpperCase().startsWith('KOTA ')) clean = clean.substring(5);
+                            else if (clean.toUpperCase().startsWith('KABUPATEN ')) clean = clean.substring(10);
+                            else if (clean.toUpperCase().startsWith('KAB ')) clean = clean.substring(4);
+                            setKota(clean ? 'KABUPATEN ' + clean.toUpperCase() : '');
+                          }}
+                          className={`px-3 py-1 text-[10px] font-black rounded-md transition-all cursor-pointer ${
+                            customCityType === 'KABUPATEN'
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          Kabupaten
+                        </button>
+                      </div>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder={`Contoh: ${customCityType === 'KOTA' ? 'SURABAYA' : 'BADUNG'}`}
+                        disabled={disableCoreFields}
+                        value={customCityInput}
+                        onChange={(e) => {
+                          const raw = e.target.value.toUpperCase();
+                          setCustomCityInput(raw);
+                          const prefix = customCityType === 'KOTA' ? 'KOTA ' : 'KABUPATEN ';
+                          let clean = raw.trim();
+                          if (clean.startsWith('KOTA ')) clean = clean.substring(5);
+                          else if (clean.startsWith('KABUPATEN ')) clean = clean.substring(10);
+                          else if (clean.startsWith('KAB ')) clean = clean.substring(4);
+                          setKota(clean ? (prefix + clean).trim() : '');
+                        }}
+                        className="w-full pl-24 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-800 text-xs font-bold focus:ring-2 focus:ring-indigo-500/20 uppercase"
+                      />
+                      <div className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[9px] font-black text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded uppercase tracking-wider">
+                        {customCityType}
+                      </div>
+                    </div>
+                    {customCityInput && (
+                      <p className="text-[10px] text-slate-500 font-medium">
+                        Tersimpan sebagai: <span className="text-indigo-600 font-extrabold">{kota}</span>
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
               {/* Pilih Nama Sekolah (Pre-surveyed) */}
-              {provinsi && kota && provinsi !== '__custom_prov__' && kota !== '__custom_city__' && (
+              {provinsi && kota && !isCustomProv && !isCustomCity && surveyedForCurrentCity.length > 0 && (
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">
                     Pilih Sekolah Hasil Survey ({kota})
                   </label>
                   <select
                     id="modal-select-surveyed-school"
-                    value={namaSekolah}
+                    value={isCustomSchoolName ? '__custom__' : namaSekolah}
                     disabled={disableCoreFields}
                     onChange={(e) => {
                       const selectedVal = e.target.value;
-                      setNamaSekolah(selectedVal);
-                      
-                      // Pre-populate instagram handle if exists
-                      const matched = (mergedDatabase[provinsi]?.[kota] || []).find(s => s.name === selectedVal);
-                      if (matched && matched.instagram) {
-                        setInstagramHandle(matched.instagram);
+                      if (selectedVal === '__custom__') {
+                        setIsCustomSchoolName(true);
+                        setNamaSekolah('');
                       } else {
-                        setInstagramHandle('');
+                        setIsCustomSchoolName(false);
+                        setNamaSekolah(selectedVal);
+                        
+                        // Pre-populate instagram handle if exists
+                        const matched = surveyedForCurrentCity.find(s => s.name === selectedVal);
+                        if (matched && matched.instagram) {
+                          setInstagramHandle(matched.instagram);
+                        }
                       }
                     }}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                   >
                     <option value="">-- Pilih dari database survey --</option>
-                    {(mergedDatabase[provinsi]?.[kota] || []).map((sch) => (
-                      <option key={sch.name} value={sch.name}>{sch.name}</option>
+                    {surveyedForCurrentCity.map((sch, idx) => (
+                      <option key={`${sch.name}-${idx}`} value={sch.name}>{sch.name}</option>
                     ))}
                     <option value="__custom__">Atau ketik nama manual...</option>
                   </select>
@@ -462,7 +627,7 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
               )}
 
               {/* School Name Manual Input */}
-              {(!provinsi || !kota || namaSekolah === '__custom__' || !(mergedDatabase[provinsi]?.[kota] || []).some(s => s.name === namaSekolah)) && (
+              {(!provinsi || !kota || isCustomProv || isCustomCity || isCustomSchoolName || surveyedForCurrentCity.length === 0) && (
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">
                     Nama Sekolah / Akun (Ketik Manual)
@@ -470,7 +635,7 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                   <input
                     type="text"
                     id="modal-school-name"
-                    value={namaSekolah === '__custom__' ? '' : namaSekolah}
+                    value={namaSekolah}
                     disabled={disableCoreFields}
                     onChange={(e) => setNamaSekolah(e.target.value)}
                     placeholder="Contoh: SMAK St. Louis 1"
@@ -585,7 +750,26 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-3">
+                {/* Periode Academic Year */}
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                    <Calendar className="h-3 w-3 text-indigo-500" /> Periode Tahun Ajaran
+                  </label>
+                  <select
+                    id="modal-periode-academic-year"
+                    value={periode}
+                    onChange={(e) => setPeriode(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-indigo-200 rounded-xl text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-xs font-black transition-all cursor-pointer"
+                  >
+                    {academicYears.map((ayName) => (
+                      <option key={ayName} value={ayName}>
+                        Periode {ayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Status Selection */}
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Status Prospek</label>
@@ -804,19 +988,38 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="flex justify-center sm:justify-start">
             {school && onDelete && (currentUser.role === 'SUPERADMIN' || currentUser.role === 'MANAGER' || currentUser.role === 'AE') && (
-              <button
-                onClick={() => {
-                  if (confirm(`Apakah Anda yakin ingin menghapus prospek ${namaSekolah}?`)) {
-                    onDelete(school.no);
-                    onClose();
-                  }
-                }}
-                id="modal-delete-school-btn"
-                className="w-full sm:w-auto px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center space-x-1.5 text-xs font-bold transition-all border border-rose-100 cursor-pointer animate-fade-in"
-              >
-                <Trash2 className="h-4 w-4" />
-                <span>Hapus Prospek</span>
-              </button>
+              showDeleteConfirm ? (
+                <div className="flex items-center gap-2 bg-rose-50 p-1.5 rounded-xl border border-rose-200 animate-fade-in">
+                  <span className="text-xs font-bold text-rose-800 px-1">Yakin hapus prospek ini?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDelete(school.no, school.namaSekolah || namaSekolah);
+                      onClose();
+                    }}
+                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                  >
+                    Ya, Hapus
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="px-2.5 py-1.5 bg-white text-slate-700 border border-slate-200 rounded-lg text-xs font-bold hover:bg-slate-50 transition-all cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  id="modal-delete-school-btn"
+                  className="w-full sm:w-auto px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center space-x-1.5 text-xs font-bold transition-all border border-rose-100 cursor-pointer animate-fade-in"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>Hapus Prospek</span>
+                </button>
+              )
             )}
           </div>
 

@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { SchoolRecord, MarketingStatus, ClosingProbability } from '../types';
 import { SURVEYED_DATABASE } from '../data/surveyedSchools';
+import { INDONESIAN_PROVINCES_DATA, formatCityName, isSameCity } from '../data/indonesiaData';
 import { 
   Search, 
   Filter, 
@@ -21,17 +22,23 @@ import {
   Sparkles,
   TrendingUp,
   Trash2,
-  X
+  X,
+  LayoutGrid,
+  List,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
-import { generateWhatsAppLink, extractPhoneNumber, formatIndonesianDate } from '../lib/phoneUtils';
+import { generateWhatsAppLink, extractPhoneNumber } from '../lib/phoneUtils';
 
 interface SchoolListProps {
   schools: SchoolRecord[];
   onSelectSchool: (school: SchoolRecord) => void;
   onAddSchool: () => void;
-  selectedStatusFilter: MarketingStatus | '';
+  selectedAcademicYearFilter?: string;
+  selectedStatusFilter: MarketingStatus | 'BELUM AKTIF' | '';
   selectedPicFilter: string | '';
-  setSelectedStatusFilter: (status: MarketingStatus | '') => void;
+  setSelectedStatusFilter: (status: MarketingStatus | 'BELUM AKTIF' | '') => void;
   setSelectedPicFilter: (pic: string | '') => void;
   mergedDatabase?: Record<string, Record<string, any[]>>;
   customDatabase?: Record<string, Record<string, any[]>>;
@@ -47,6 +54,7 @@ export default function SchoolList({
   schools, 
   onSelectSchool, 
   onAddSchool,
+  selectedAcademicYearFilter,
   selectedStatusFilter,
   selectedPicFilter,
   setSelectedStatusFilter,
@@ -75,6 +83,11 @@ export default function SchoolList({
   const [levelFilter, setLevelFilter] = useState<'ALL' | 'SMA' | 'SMK' | 'SMP' | 'MAN'>('ALL');
   const [probabilityFilter, setProbabilityFilter] = useState<ClosingProbability | 'ALL'>('ALL');
   const [showAdvanceFilters, setShowAdvanceFilters] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<'grid' | 'list'>('grid');
+  
+  // Sorting states
+  const [sortBy, setSortBy] = useState<'name' | 'status' | 'pic' | 'update'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -169,11 +182,6 @@ export default function SchoolList({
       }))
       .filter(s => s.name !== '');
 
-    if (validSchools.length === 0) {
-      alert('Masukkan minimal 1 nama sekolah!');
-      return;
-    }
-
     const updatedCustomDb = { ...customDatabase };
     
     if (!updatedCustomDb[finalProv]) {
@@ -216,12 +224,17 @@ export default function SchoolList({
     setIsExpanding(false);
   };
 
-  // List of available provinces (mergedDatabase + schools)
+  // List of available provinces (mergedDatabase + INDONESIAN_PROVINCES_DATA + schools)
   const provinces = useMemo(() => {
     const provSet = new Set<string>();
     
     // Add from mergedDatabase
     Object.keys(mergedDatabase).forEach(prov => {
+      provSet.add(prov.toUpperCase().trim());
+    });
+
+    // Add from INDONESIAN_PROVINCES_DATA
+    Object.keys(INDONESIAN_PROVINCES_DATA).forEach(prov => {
       provSet.add(prov.toUpperCase().trim());
     });
     
@@ -235,27 +248,46 @@ export default function SchoolList({
     return Array.from(provSet).sort();
   }, [mergedDatabase, schools]);
 
-  // List of available cities under selected province
+  // List of available cities under selected province or all provinces
   const cities = useMemo(() => {
-    if (!selectedProvince) return [];
     const citySet = new Set<string>();
-    const upperProv = selectedProvince.toUpperCase().trim();
-    
-    // Add from mergedDatabase
-    if (mergedDatabase[upperProv]) {
-      Object.keys(mergedDatabase[upperProv]).forEach(city => {
-        citySet.add(city.toUpperCase().trim());
+    if (selectedProvince) {
+      const upperProv = selectedProvince.toUpperCase().trim();
+      
+      // Add from mergedDatabase
+      if (mergedDatabase[upperProv]) {
+        Object.keys(mergedDatabase[upperProv]).forEach(city => {
+          citySet.add(formatCityName(city, upperProv));
+        });
+      }
+
+      // Add from INDONESIAN_PROVINCES_DATA
+      const standardCities = INDONESIAN_PROVINCES_DATA[upperProv] || [];
+      standardCities.forEach(c => {
+        citySet.add(formatCityName(c, upperProv));
+      });
+      
+      // Add from active prospects in this province
+      schools.forEach(s => {
+        if (s.provinsi?.toUpperCase().trim() === upperProv && s.kota) {
+          citySet.add(formatCityName(s.kota, upperProv));
+        }
+      });
+    } else {
+      // All cities across all provinces
+      Object.entries(mergedDatabase).forEach(([prov, cityObj]) => {
+        Object.keys(cityObj).forEach(city => {
+          citySet.add(formatCityName(city, prov));
+        });
+      });
+      schools.forEach(s => {
+        if (s.kota) {
+          citySet.add(formatCityName(s.kota, s.provinsi || ''));
+        }
       });
     }
     
-    // Add from active prospects in this province
-    schools.forEach(s => {
-      if (s.provinsi?.toUpperCase().trim() === upperProv && s.kota) {
-        citySet.add(s.kota.toUpperCase().trim());
-      }
-    });
-    
-    return Array.from(citySet).sort();
+    return Array.from(citySet).filter(Boolean).sort();
   }, [selectedProvince, mergedDatabase, schools]);
 
   // Extract all unique PICs for the filter dropdown (prospect mode)
@@ -270,27 +302,33 @@ export default function SchoolList({
   // Handle Province selection change
   const handleProvinceChange = (province: string) => {
     setSelectedProvince(province);
-    const upperProv = province.toUpperCase().trim();
-    
-    const citySet = new Set<string>();
-    if (mergedDatabase[upperProv]) {
-      Object.keys(mergedDatabase[upperProv]).forEach(city => {
-        citySet.add(city.toUpperCase().trim());
-      });
-    }
-    schools.forEach(s => {
-      if (s.provinsi?.toUpperCase().trim() === upperProv && s.kota) {
-        citySet.add(s.kota.toUpperCase().trim());
-      }
-    });
-    
-    const availableCities = Array.from(citySet).sort();
-    if (availableCities.length > 0) {
-      setSelectedCity(availableCities[0]);
+    setSelectedCity('');
+    setCurrentPage(1);
+  };
+
+  // Handle Status Card click from Akumulasi Status Wilayah
+  const handleStatusCardClick = (statusKey: MarketingStatus | 'BELUM AKTIF' | '') => {
+    if (statusKey === '') {
+      setSelectedStatusFilter('');
+    } else if (selectedStatusFilter === statusKey) {
+      setSelectedStatusFilter('');
     } else {
-      setSelectedCity('');
+      setSelectedStatusFilter(statusKey);
     }
     setCurrentPage(1);
+  };
+
+  const getActiveRegionLabel = () => {
+    if (selectedProvince && selectedCity) {
+      return `${selectedCity}, ${selectedProvince}`;
+    }
+    if (selectedProvince && !selectedCity) {
+      return `Semua Kota/Kab, ${selectedProvince}`;
+    }
+    if (!selectedProvince && selectedCity) {
+      return `${selectedCity}, Semua Provinsi`;
+    }
+    return `Semua Wilayah (Nasional)`;
   };
 
   // Helper styles for badges
@@ -352,6 +390,128 @@ export default function SchoolList({
     return null;
   };
 
+  const parseDateToTimestamp = (dateStr?: string | null): number => {
+    if (!dateStr || typeof dateStr !== 'string') return 0;
+    const str = dateStr.trim();
+    if (!str) return 0;
+
+    const MONTHS_MAP: Record<string, number> = {
+      januari: 0, jan: 0, january: 0,
+      februari: 1, feb: 1, february: 1,
+      maret: 2, mar: 2, march: 2,
+      april: 3, apr: 3,
+      mei: 4, may: 4,
+      juni: 5, jun: 5, june: 5,
+      juli: 6, jul: 6, july: 6,
+      agustus: 7, ags: 7, agt: 7, august: 7,
+      september: 8, sep: 8, sept: 8,
+      oktober: 9, okt: 9, oct: 9, october: 9,
+      november: 10, nov: 10,
+      desember: 11, des: 11, december: 11
+    };
+
+    // Format A: DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    const idNumericMatch = str.match(/(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
+    if (idNumericMatch) {
+      const d = parseInt(idNumericMatch[1], 10);
+      const m = parseInt(idNumericMatch[2], 10) - 1;
+      const y = parseInt(idNumericMatch[3], 10);
+      return new Date(y, m, d).getTime();
+    }
+
+    // Format B: YYYY-MM-DD or YYYY/MM/DD
+    const isoMatch = str.match(/(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/);
+    if (isoMatch) {
+      const y = parseInt(isoMatch[1], 10);
+      const m = parseInt(isoMatch[2], 10) - 1;
+      const d = parseInt(isoMatch[3], 10);
+      return new Date(y, m, d).getTime();
+    }
+
+    // Format C: "27 Juli 2026" or "27 Juli 2026, 14:30" or "27-Juli-2026"
+    const idTextMatch = str.match(/(\d{1,2})[\s/.-]+([a-zA-Z]+)[\s/.-]+(\d{4})/);
+    if (idTextMatch) {
+      const d = parseInt(idTextMatch[1], 10);
+      const mStr = idTextMatch[2].toLowerCase();
+      const y = parseInt(idTextMatch[3], 10);
+      if (mStr in MONTHS_MAP) {
+        return new Date(y, MONTHS_MAP[mStr], d).getTime();
+      }
+    }
+
+    // Format D: "27 Juli" (without year, assume current year)
+    const idTextNoYearMatch = str.match(/(\d{1,2})[\s/.-]+([a-zA-Z]+)/);
+    if (idTextNoYearMatch) {
+      const d = parseInt(idTextNoYearMatch[1], 10);
+      const mStr = idTextNoYearMatch[2].toLowerCase();
+      if (mStr in MONTHS_MAP) {
+        const currentYear = new Date().getFullYear();
+        return new Date(currentYear, MONTHS_MAP[mStr], d).getTime();
+      }
+    }
+
+    const parsed = Date.parse(str);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  const getStatusWeight = (status?: string | null): number => {
+    if (!status || status === 'BELUM AKTIF' || status === 'BELUM DIPROSPEK') return 90;
+    const s = status.toUpperCase().trim();
+    switch (s) {
+      case 'BARU':
+        return 10;
+      case 'DIHUBUNGI':
+        return 20;
+      case 'FOLLOW UP':
+        return 30;
+      case 'MEETING / VISIT':
+      case 'MEETING':
+      case 'VISIT':
+        return 40;
+      case 'PROSPEK':
+        return 50;
+      case 'CLOSING':
+        return 60;
+      case 'DEAL':
+      case 'CLOSED':
+        return 70;
+      case 'LOST':
+      case 'GAGAL':
+        return 80;
+      default:
+        return 85;
+    }
+  };
+
+  const getUpdateTimestamp = (item: any, isDbMode: boolean): number => {
+    let activeRecord: SchoolRecord | null = null;
+    if (isDbMode) {
+      activeRecord = item.active as SchoolRecord | null;
+    } else {
+      activeRecord = item as SchoolRecord;
+    }
+
+    if (!activeRecord) return 0;
+
+    if (activeRecord.tanggalFollowUpTerakhir) {
+      const ts = parseDateToTimestamp(activeRecord.tanggalFollowUpTerakhir);
+      if (ts > 0) return ts;
+    }
+
+    if (activeRecord.updates && activeRecord.updates.length > 0) {
+      const lastUpdateStr = activeRecord.updates[activeRecord.updates.length - 1];
+      const ts = parseDateToTimestamp(lastUpdateStr);
+      if (ts > 0) return ts;
+    }
+
+    if (activeRecord.tanggalKontakAwal) {
+      const ts = parseDateToTimestamp(activeRecord.tanggalKontakAwal);
+      if (ts > 0) return ts;
+    }
+
+    return 0;
+  };
+
   // --- DATABASE MODE LOGIC ---
   const databaseSchools = useMemo(() => {
     const searchLower = search.toLowerCase().trim();
@@ -365,10 +525,37 @@ export default function SchoolList({
     if (selectedProvince && selectedCity) {
       const upperProv = selectedProvince.toUpperCase().trim();
       const upperCity = selectedCity.toUpperCase().trim();
-      const surveyed = mergedDatabase[upperProv]?.[upperCity] || [];
+      let surveyed = mergedDatabase[upperProv]?.[upperCity] || [];
+      if (surveyed.length === 0 && mergedDatabase[upperProv]) {
+        const matchKey = Object.keys(mergedDatabase[upperProv]).find(c => isSameCity(c, upperCity, upperProv));
+        if (matchKey) {
+          surveyed = mergedDatabase[upperProv][matchKey] || [];
+        }
+      }
       surveyedListWithRegion = surveyed.map(s => ({ surveyed: s, prov: upperProv, city: upperCity }));
-    } else if (searchLower) {
-      // Search across ALL regions in mergedDatabase if no specific region is selected
+    } else if (selectedProvince && !selectedCity) {
+      // Province selected, all cities in this province
+      const upperProv = selectedProvince.toUpperCase().trim();
+      const cityMap = mergedDatabase[upperProv] || {};
+      Object.entries(cityMap).forEach(([cName, schList]) => {
+        schList.forEach(s => {
+          surveyedListWithRegion.push({ surveyed: s, prov: upperProv, city: cName });
+        });
+      });
+    } else if (!selectedProvince && selectedCity) {
+      // All provinces, specific city selected
+      const upperCity = selectedCity.toUpperCase().trim();
+      Object.entries(mergedDatabase).forEach(([pName, cityObj]) => {
+        Object.entries(cityObj).forEach(([cName, schList]) => {
+          if (isSameCity(cName, upperCity, pName)) {
+            schList.forEach(s => {
+              surveyedListWithRegion.push({ surveyed: s, prov: pName, city: cName });
+            });
+          }
+        });
+      });
+    } else {
+      // All provinces and all cities
       Object.entries(mergedDatabase).forEach(([pName, cityObj]) => {
         Object.entries(cityObj).forEach(([cName, schList]) => {
           schList.forEach(s => {
@@ -376,22 +563,23 @@ export default function SchoolList({
           });
         });
       });
-    } else {
-      return [];
     }
 
-    // Active prospects in the scoped region(s) or all if search is global
-    const activeProspects = (selectedProvince && selectedCity)
-      ? schools.filter(s =>
-          s.provinsi?.toUpperCase().trim() === selectedProvince.toUpperCase().trim() &&
-          s.kota?.toUpperCase().trim() === selectedCity.toUpperCase().trim()
-        )
-      : schools;
+    // Active prospects in the scoped region(s)
+    const activeProspects = schools.filter(s => {
+      if (selectedProvince && s.provinsi?.toUpperCase().trim() !== selectedProvince.toUpperCase().trim()) {
+        return false;
+      }
+      if (selectedCity && !isSameCity(s.kota, selectedCity, selectedProvince)) {
+        return false;
+      }
+      return true;
+    });
 
     // Map surveyed schools and join with active prospect records
     const mapped = surveyedListWithRegion.map(({ surveyed, prov, city }) => {
       const activeRecord = activeProspects.find(s => 
-        ((!selectedProvince || s.provinsi?.toUpperCase().trim() === prov) && (!selectedCity || s.kota?.toUpperCase().trim() === city)) &&
+        ((!selectedProvince || s.provinsi?.toUpperCase().trim() === prov) && (!selectedCity || isSameCity(s.kota, city, prov))) &&
         ((s.originalName && s.originalName.toLowerCase().trim() === surveyed.name.toLowerCase().trim()) ||
          (s.namaSekolah && s.namaSekolah.toLowerCase().trim() === surveyed.name.toLowerCase().trim()))
       );
@@ -472,7 +660,14 @@ export default function SchoolList({
 
       // 3. Status Filter (For Database mode)
       if (selectedStatusFilter) {
-        if (!item.active || item.active.status !== selectedStatusFilter) {
+        if ((selectedStatusFilter as string) === 'BELUM AKTIF') {
+          if (item.active) return false;
+        } else if (!item.active || item.active.status !== selectedStatusFilter) {
+          return false;
+        }
+      } else {
+        // Tab "DATABASE SEKOLAH" default status: { BELUM AKTIF, BARU, DIHUBUNGI, FOLLOW UP, LOST }
+        if (item.active && ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(item.active.status)) {
           return false;
         }
       }
@@ -481,11 +676,51 @@ export default function SchoolList({
     });
   }, [schools, selectedProvince, selectedCity, search, levelFilter, selectedStatusFilter, mergedDatabase]);
 
-  // Statistics for selected city with full pipeline breakdown
+  // Statistics for selected region with full pipeline breakdown
   const cityStats = useMemo(() => {
-    const total = databaseSchools.length;
-    const activeCount = databaseSchools.filter(s => s.isMatched).length;
-    const pendingCount = total - activeCount;
+    // 1. Get surveyed target schools in selected region
+    let surveyedInScope: Array<{ name: string; prov: string; city: string }> = [];
+    if (selectedProvince && selectedCity) {
+      const upperP = selectedProvince.toUpperCase().trim();
+      const upperC = selectedCity.toUpperCase().trim();
+      let surveyed = mergedDatabase[upperP]?.[upperC] || [];
+      if (surveyed.length === 0 && mergedDatabase[upperP]) {
+        const matchKey = Object.keys(mergedDatabase[upperP]).find(c => isSameCity(c, upperC, upperP));
+        if (matchKey) surveyed = mergedDatabase[upperP][matchKey] || [];
+      }
+      surveyedInScope = surveyed.map(s => ({ name: s.name, prov: upperP, city: upperC }));
+    } else if (selectedProvince && !selectedCity) {
+      const upperP = selectedProvince.toUpperCase().trim();
+      const cityMap = mergedDatabase[upperP] || {};
+      Object.entries(cityMap).forEach(([cName, schList]) => {
+        schList.forEach(s => surveyedInScope.push({ name: s.name, prov: upperP, city: cName }));
+      });
+    } else if (!selectedProvince && selectedCity) {
+      const upperC = selectedCity.toUpperCase().trim();
+      Object.entries(mergedDatabase).forEach(([pName, cityObj]) => {
+        Object.entries(cityObj).forEach(([cName, schList]) => {
+          if (isSameCity(cName, upperC, pName)) {
+            schList.forEach(s => surveyedInScope.push({ name: s.name, prov: pName, city: cName }));
+          }
+        });
+      });
+    } else {
+      Object.entries(mergedDatabase).forEach(([pName, cityObj]) => {
+        Object.entries(cityObj).forEach(([cName, schList]) => {
+          schList.forEach(s => surveyedInScope.push({ name: s.name, prov: pName, city: cName }));
+        });
+      });
+    }
+
+    // 2. Get active schools in scope
+    const activeInScope = schools.filter(s => {
+      if (selectedProvince && s.provinsi?.toUpperCase().trim() !== selectedProvince.toUpperCase().trim()) return false;
+      if (selectedCity && !isSameCity(s.kota, selectedCity, selectedProvince)) return false;
+      return true;
+    });
+
+    const total = Math.max(surveyedInScope.length, activeInScope.length);
+    const activeCount = activeInScope.length;
 
     let baru = 0;
     let dihubungi = 0;
@@ -495,18 +730,18 @@ export default function SchoolList({
     let deal = 0;
     let lost = 0;
 
-    databaseSchools.forEach((s) => {
-      if (s.isMatched && s.active) {
-        const status = s.active.status;
-        if (status === 'BARU') baru++;
-        else if (status === 'DIHUBUNGI') dihubungi++;
-        else if (status === 'FOLLOW UP') followUp++;
-        else if (status === 'PROSPEK' || (status as string) === 'CLOSING') prospek++;
-        else if (status === 'MEETING / VISIT') meetingVisit++;
-        else if (status === 'DEAL' || (status as string) === 'CLOSED') deal++;
-        else if (status === 'LOST' || (status as string) === 'GAGAL') lost++;
-      }
+    activeInScope.forEach((s) => {
+      const status = s.status;
+      if (status === 'BARU') baru++;
+      else if (status === 'DIHUBUNGI') dihubungi++;
+      else if (status === 'FOLLOW UP') followUp++;
+      else if (status === 'PROSPEK' || (status as string) === 'CLOSING') prospek++;
+      else if (status === 'MEETING / VISIT') meetingVisit++;
+      else if (status === 'DEAL' || (status as string) === 'CLOSED') deal++;
+      else if (status === 'LOST' || (status as string) === 'GAGAL') lost++;
     });
+
+    const pendingCount = Math.max(0, total - activeCount);
 
     return { 
       total, 
@@ -520,14 +755,14 @@ export default function SchoolList({
       deal,
       lost
     };
-  }, [databaseSchools]);
+  }, [schools, selectedProvince, selectedCity, mergedDatabase]);
 
 
   // --- PROSPECT MODE LOGIC (Active Leads Flat List) ---
   const activeFilteredSchools = useMemo(() => {
     return schools.filter((school) => {
-      // Include schools that are active or in prospect stage
-      const isProspectStage = ['BARU', 'DIHUBUNGI', 'FOLLOW UP', 'PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED', 'LOST'].includes(school.status);
+      // Tab "DAFTAR SEKOLAH PROSPEK": Only include schools in status { PROSPEK, MEETING / VISIT, DEAL }
+      const isProspectStage = ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(school.status);
       if (!isProspectStage) {
         return false;
       }
@@ -597,7 +832,7 @@ export default function SchoolList({
       }
       if (selectedCity) {
         const schoolCity = school.kota?.toUpperCase().trim() || '';
-        if (schoolCity !== selectedCity.toUpperCase().trim()) {
+        if (!isSameCity(schoolCity, selectedCity, selectedProvince)) {
           return false;
         }
       }
@@ -606,24 +841,133 @@ export default function SchoolList({
     });
   }, [schools, search, selectedStatusFilter, selectedPicFilter, probabilityFilter, levelFilter, selectedProvince, selectedCity]);
 
+  // --- SORTING COMPUTATIONS ---
+  const sortedDatabaseSchools = useMemo(() => {
+    const list = [...databaseSchools];
+    list.sort((a, b) => {
+      const nameA = (a.surveyed?.name || a.active?.namaSekolah || '').trim();
+      const nameB = (b.surveyed?.name || b.active?.namaSekolah || '').trim();
+      const nameCompare = nameA.localeCompare(nameB, 'id', { sensitivity: 'base' });
+
+      let comparison = 0;
+
+      if (sortBy === 'name') {
+        comparison = nameCompare;
+      } else if (sortBy === 'status') {
+        const statusA = a.active?.status || 'BELUM AKTIF';
+        const statusB = b.active?.status || 'BELUM AKTIF';
+        const weightA = getStatusWeight(statusA);
+        const weightB = getStatusWeight(statusB);
+        comparison = weightA - weightB;
+        if (comparison === 0) {
+          comparison = nameCompare;
+        }
+      } else if (sortBy === 'pic') {
+        const picA = (a.active?.picMarketing || '').trim();
+        const picB = (b.active?.picMarketing || '').trim();
+
+        if (!picA && picB) return 1;  // Unassigned PIC always at bottom
+        if (picA && !picB) return -1; // Unassigned PIC always at bottom
+        if (!picA && !picB) {
+          comparison = nameCompare;
+        } else {
+          comparison = picA.localeCompare(picB, 'id', { sensitivity: 'base' });
+          if (comparison === 0) {
+            comparison = nameCompare;
+          }
+        }
+      } else if (sortBy === 'update') {
+        const timeA = getUpdateTimestamp(a, true);
+        const timeB = getUpdateTimestamp(b, true);
+
+        if (timeA === 0 && timeB > 0) return 1;  // Items without update date always at bottom
+        if (timeA > 0 && timeB === 0) return -1; // Items without update date always at bottom
+        if (timeA === 0 && timeB === 0) {
+          comparison = nameCompare;
+        } else {
+          comparison = timeA - timeB;
+          if (comparison === 0) {
+            comparison = nameCompare;
+          }
+        }
+      }
+
+      return sortOrder === 'desc' ? -comparison : comparison;
+    });
+    return list;
+  }, [databaseSchools, sortBy, sortOrder]);
+
+  const sortedActiveFilteredSchools = useMemo(() => {
+    const list = [...activeFilteredSchools];
+    list.sort((a, b) => {
+      const nameA = (a.namaSekolah || '').trim();
+      const nameB = (b.namaSekolah || '').trim();
+      const nameCompare = nameA.localeCompare(nameB, 'id', { sensitivity: 'base' });
+
+      let comparison = 0;
+
+      if (sortBy === 'name') {
+        comparison = nameCompare;
+      } else if (sortBy === 'status') {
+        const weightA = getStatusWeight(a.status);
+        const weightB = getStatusWeight(b.status);
+        comparison = weightA - weightB;
+        if (comparison === 0) {
+          comparison = nameCompare;
+        }
+      } else if (sortBy === 'pic') {
+        const picA = (a.picMarketing || '').trim();
+        const picB = (b.picMarketing || '').trim();
+
+        if (!picA && picB) return 1;  // Unassigned PIC always at bottom
+        if (picA && !picB) return -1; // Unassigned PIC always at bottom
+        if (!picA && !picB) {
+          comparison = nameCompare;
+        } else {
+          comparison = picA.localeCompare(picB, 'id', { sensitivity: 'base' });
+          if (comparison === 0) {
+            comparison = nameCompare;
+          }
+        }
+      } else if (sortBy === 'update') {
+        const timeA = getUpdateTimestamp(a, false);
+        const timeB = getUpdateTimestamp(b, false);
+
+        if (timeA === 0 && timeB > 0) return 1;  // Items without update date always at bottom
+        if (timeA > 0 && timeB === 0) return -1; // Items without update date always at bottom
+        if (timeA === 0 && timeB === 0) {
+          comparison = nameCompare;
+        } else {
+          comparison = timeA - timeB;
+          if (comparison === 0) {
+            comparison = nameCompare;
+          }
+        }
+      }
+
+      return sortOrder === 'desc' ? -comparison : comparison;
+    });
+    return list;
+  }, [activeFilteredSchools, sortBy, sortOrder]);
+
   const totalProspectsCount = useMemo(() => {
     return schools.filter(s => ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(s.status)).length;
   }, [schools]);
 
-  // Reset pagination on filter or mode changes
-  useMemo(() => {
+  // Reset pagination on filter or mode or sort changes
+  useEffect(() => {
     setCurrentPage(1);
-  }, [search, viewMode, selectedProvince, selectedCity, selectedStatusFilter, selectedPicFilter, probabilityFilter, levelFilter]);
+  }, [search, viewMode, selectedProvince, selectedCity, selectedStatusFilter, selectedPicFilter, probabilityFilter, levelFilter, sortBy, sortOrder]);
 
   // Paginated items depending on the viewMode
   const paginatedSchools = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
-    const items = viewMode === 'database' ? databaseSchools : activeFilteredSchools;
+    const items = viewMode === 'database' ? sortedDatabaseSchools : sortedActiveFilteredSchools;
     return items.slice(startIndex, startIndex + itemsPerPage);
-  }, [viewMode, databaseSchools, activeFilteredSchools, currentPage]);
+  }, [viewMode, sortedDatabaseSchools, sortedActiveFilteredSchools, currentPage]);
 
   const totalPages = Math.ceil(
-    (viewMode === 'database' ? databaseSchools.length : activeFilteredSchools.length) / itemsPerPage
+    (viewMode === 'database' ? sortedDatabaseSchools.length : sortedActiveFilteredSchools.length) / itemsPerPage
   );
 
   // Trigger creating a new active prospect based on target surveyed school
@@ -643,7 +987,7 @@ export default function SchoolList({
       kontakPic2: '',
       kontakPic3: '',
       kontakPic4: '',
-      tanggalKontakAwal: new Date().toISOString().slice(0, 10),
+      tanggalKontakAwal: new Date().toLocaleDateString('id-ID'),
       jenisLayanan: '',
       catatanAwal: '',
       tanggalFollowUpTerakhir: '',
@@ -722,7 +1066,6 @@ export default function SchoolList({
               setCurrentPage(1);
             }}
             className="w-full p-2.5 bg-white border border-indigo-200/60 rounded-xl text-slate-800 text-xs font-bold focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all shadow-2xs"
-            disabled={!selectedProvince}
           >
             <option value="">-- SEMUA KOTA/KABUPATEN --</option>
             {cities.map(ct => (
@@ -737,7 +1080,7 @@ export default function SchoolList({
               ? '* Pilih wilayah untuk menjelajahi database sekolah target, atau buat wilayah ekspansi baru.'
               : '* Pilih wilayah untuk memfilter daftar prospek aktif secara real-time dan melihat akumulasi status.'}
           </p>
-          {viewMode === 'database' && selectedProvince && selectedCity && (
+          {viewMode === 'database' && (
             <button
               onClick={() => {
                 setIsExpanding(!isExpanding);
@@ -760,136 +1103,272 @@ export default function SchoolList({
         </div>
       </div>
 
-      {/* Accumulative Pipeline Status Panel for Selected Region */}
-      {selectedProvince && selectedCity && (
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4" id="database-region-pipeline-panel">
-          <div className="flex justify-between items-center flex-wrap gap-2">
-            <div>
-              <h3 className="font-extrabold text-slate-900 text-xs sm:text-sm uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="h-4.5 w-4.5 text-indigo-500 animate-pulse" /> Akumulasi Status Wilayah
-              </h3>
-              <p className="text-[10px] text-slate-500 font-medium mt-0.5">
-                Wilayah aktif: <span className="text-indigo-600 font-black">{selectedCity}, {selectedProvince}</span>
-              </p>
-            </div>
+      {/* Accumulative Pipeline Status Panel for Selected Region / All Regions */}
+      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4" id="database-region-pipeline-panel">
+        <div className="flex justify-between items-center flex-wrap gap-2">
+          <div>
+            <h3 className="font-extrabold text-slate-900 text-xs sm:text-sm uppercase tracking-wider flex items-center gap-1.5">
+              <Sparkles className="h-4.5 w-4.5 text-indigo-500 animate-pulse" /> Akumulasi Status Wilayah
+            </h3>
+            <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+              Wilayah aktif: <span className="text-indigo-600 font-black">{getActiveRegionLabel()}</span>
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedStatusFilter && (
+              <button
+                onClick={() => handleStatusCardClick('')}
+                className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-all flex items-center gap-1 cursor-pointer"
+                title="Hapus filter status"
+              >
+                <X className="h-3 w-3" />
+                <span>Reset Filter Status</span>
+              </button>
+            )}
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
               {viewMode === 'prospects' 
                 ? `${cityStats.prospek + cityStats.meetingVisit + cityStats.deal} prospek aktif`
                 : `${cityStats.activeCount} dari ${cityStats.total} sedang diprospek`}
             </span>
           </div>
+        </div>
 
-          <div className={viewMode === 'prospects' ? "grid grid-cols-1 sm:grid-cols-3 gap-2" : "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-2"} id="region-pipeline-grid">
-            {viewMode === 'database' && (
-              <>
-                {/* Total Target */}
-                <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex flex-col justify-between min-h-[65px]">
-                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Total Database</span>
-                  <div className="mt-1 flex items-baseline justify-between">
-                    <span className="text-lg font-black text-slate-900">{cityStats.total}</span>
-                    <span className="text-[8px] text-slate-400 font-medium">Sekolah</span>
-                  </div>
-                </div>
-
-                {/* Belum Diprospek */}
-                <div className="p-2.5 bg-slate-50/50 border border-dashed border-slate-200 rounded-xl flex flex-col justify-between min-h-[65px]">
-                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Belum Aktif</span>
-                  <div className="mt-1 flex items-baseline justify-between">
-                    <span className="text-lg font-black text-slate-400">{cityStats.pendingCount}</span>
-                    <span className="text-[8px] text-slate-400 font-medium">Target</span>
-                  </div>
-                </div>
-
-                {/* BARU */}
-                <div className="p-2.5 bg-indigo-50/20 border border-indigo-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-                  <div className="flex justify-between items-start gap-1">
-                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Baru</span>
-                    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full shrink-0" />
-                  </div>
-                  <div className="mt-1 flex items-baseline justify-between">
-                    <span className="text-lg font-black text-slate-800">{cityStats.baru}</span>
-                    <span className="text-[8px] text-slate-500 font-medium">Prospek</span>
-                  </div>
-                </div>
-
-                {/* DIHUBUNGI */}
-                <div className="p-2.5 bg-blue-50/20 border border-blue-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-                  <div className="flex justify-between items-start gap-1">
-                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Dihubungi</span>
-                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0" />
-                  </div>
-                  <div className="mt-1 flex items-baseline justify-between">
-                    <span className="text-lg font-black text-blue-700">{cityStats.dihubungi}</span>
-                    <span className="text-[8px] text-blue-500 font-medium">Prospek</span>
-                  </div>
-                </div>
-
-                {/* FOLLOW UP */}
-                <div className="p-2.5 bg-amber-50/20 border border-amber-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-                  <div className="flex justify-between items-start gap-1">
-                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Follow Up</span>
-                    <span className="w-1.5 h-1.5 bg-amber-500 rounded-full shrink-0" />
-                  </div>
-                  <div className="mt-1 flex items-baseline justify-between">
-                    <span className="text-lg font-black text-amber-700">{cityStats.followUp}</span>
-                    <span className="text-[8px] text-amber-500 font-medium">Prospek</span>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* PROSPEK */}
-            <div className="p-2.5 bg-indigo-50/20 border border-indigo-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Prospek</span>
-                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full shrink-0" />
-              </div>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-indigo-700">{cityStats.prospek}</span>
-                <span className="text-[8px] text-indigo-500 font-medium">Prospek</span>
-              </div>
+        {selectedStatusFilter && (
+          <div className="flex items-center justify-between gap-2 bg-indigo-50/80 border border-indigo-200 text-indigo-900 text-xs font-bold px-3.5 py-2 rounded-xl">
+            <div className="flex items-center gap-2">
+              <Filter className="h-3.5 w-3.5 text-indigo-600" />
+              <span>Filtering aktif berdasarkan status: <span className="bg-indigo-600 text-white px-2 py-0.5 rounded-md text-[11px] font-black uppercase tracking-wide">{selectedStatusFilter}</span></span>
             </div>
+            <button
+              onClick={() => handleStatusCardClick('')}
+              className="text-[10px] font-bold px-2 py-0.5 rounded bg-white hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              <X className="h-3 w-3" />
+              <span>Tampilkan Semua</span>
+            </button>
+          </div>
+        )}
 
-            {/* MEETING / VISIT */}
-            <div className="p-2.5 bg-purple-50/20 border border-purple-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Meeting / Visit</span>
-                <span className="w-1.5 h-1.5 bg-purple-500 rounded-full shrink-0" />
-              </div>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-purple-700">{cityStats.meetingVisit}</span>
-                <span className="text-[8px] text-purple-500 font-medium">Kunjungan</span>
-              </div>
-            </div>
-
-            {/* DEAL */}
-            <div className="p-2.5 bg-emerald-50/30 border border-emerald-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-              <div className="flex justify-between items-start gap-1">
-                <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Deal</span>
-                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0" />
-              </div>
-              <div className="mt-1 flex items-baseline justify-between">
-                <span className="text-lg font-black text-emerald-700">{cityStats.deal}</span>
-                <span className="text-[8px] text-emerald-500 font-medium">Sukses</span>
-              </div>
-            </div>
-
-            {viewMode === 'database' && (
-              /* LOST */
-              <div className="p-2.5 bg-rose-50/20 border border-rose-100 rounded-xl flex flex-col justify-between min-h-[65px]">
-                <div className="flex justify-between items-start gap-1">
-                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest">Lost</span>
-                  <span className="w-1.5 h-1.5 bg-rose-500 rounded-full shrink-0" />
+        <div className={viewMode === 'prospects' ? "grid grid-cols-2 sm:grid-cols-4 gap-2" : "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-2"} id="region-pipeline-grid">
+          {viewMode === 'database' && (
+            <>
+              {/* Total Target */}
+              <button
+                type="button"
+                onClick={() => handleStatusCardClick('')}
+                title="Klik untuk menampilkan semua database"
+                className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                  selectedStatusFilter === ''
+                    ? 'bg-slate-900 text-white border-2 border-slate-900 shadow-sm scale-[1.02]'
+                    : 'bg-slate-50 border border-slate-200/80 hover:bg-slate-100 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex justify-between items-start">
+                  <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === '' ? 'text-slate-300' : 'text-slate-400'}`}>Total Database</span>
+                  {selectedStatusFilter === '' && <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />}
                 </div>
                 <div className="mt-1 flex items-baseline justify-between">
-                  <span className="text-lg font-black text-rose-700">{cityStats.lost}</span>
-                  <span className="text-[8px] text-rose-500 font-medium">Batal</span>
+                  <span className={`text-lg font-black ${selectedStatusFilter === '' ? 'text-white' : 'text-slate-900'}`}>{cityStats.total}</span>
+                  <span className={`text-[8px] font-medium ${selectedStatusFilter === '' ? 'text-slate-300' : 'text-slate-400'}`}>Sekolah</span>
                 </div>
+              </button>
+
+              {/* Belum Diprospek */}
+              <button
+                type="button"
+                onClick={() => handleStatusCardClick('BELUM AKTIF')}
+                title="Klik untuk menyaring status Belum Aktif"
+                className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                  selectedStatusFilter === 'BELUM AKTIF'
+                    ? 'bg-slate-800 text-white border-2 border-slate-800 ring-2 ring-slate-400/50 shadow-sm scale-[1.02]'
+                    : 'bg-slate-50/50 border border-dashed border-slate-300 hover:bg-slate-100/80 hover:border-slate-400'
+                }`}
+              >
+                <div className="flex justify-between items-start">
+                  <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'BELUM AKTIF' ? 'text-slate-300' : 'text-slate-400'}`}>Belum Aktif</span>
+                  {selectedStatusFilter === 'BELUM AKTIF' && <span className="w-1.5 h-1.5 bg-slate-300 rounded-full" />}
+                </div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className={`text-lg font-black ${selectedStatusFilter === 'BELUM AKTIF' ? 'text-white' : 'text-slate-500'}`}>{cityStats.pendingCount}</span>
+                  <span className={`text-[8px] font-medium ${selectedStatusFilter === 'BELUM AKTIF' ? 'text-slate-300' : 'text-slate-400'}`}>Target</span>
+                </div>
+              </button>
+
+              {/* BARU */}
+              <button
+                type="button"
+                onClick={() => handleStatusCardClick('BARU')}
+                title="Klik untuk menyaring status Baru"
+                className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                  selectedStatusFilter === 'BARU'
+                    ? 'bg-slate-700 text-white border-2 border-slate-700 ring-2 ring-slate-400/50 shadow-sm scale-[1.02]'
+                    : 'bg-slate-50 border border-slate-200 hover:bg-slate-100 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex justify-between items-start gap-1">
+                  <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'BARU' ? 'text-slate-300' : 'text-slate-400'}`}>Baru</span>
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'BARU' ? 'bg-white' : 'bg-slate-400'}`} />
+                </div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className={`text-lg font-black ${selectedStatusFilter === 'BARU' ? 'text-white' : 'text-slate-800'}`}>{cityStats.baru}</span>
+                  <span className={`text-[8px] font-medium ${selectedStatusFilter === 'BARU' ? 'text-slate-300' : 'text-slate-500'}`}>Prospek</span>
+                </div>
+              </button>
+
+              {/* DIHUBUNGI */}
+              <button
+                type="button"
+                onClick={() => handleStatusCardClick('DIHUBUNGI')}
+                title="Klik untuk menyaring status Dihubungi"
+                className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                  selectedStatusFilter === 'DIHUBUNGI'
+                    ? 'bg-blue-600 text-white border-2 border-blue-600 ring-2 ring-blue-300 shadow-sm scale-[1.02]'
+                    : 'bg-blue-50/30 border border-blue-100 hover:bg-blue-50 hover:border-blue-200'
+                }`}
+              >
+                <div className="flex justify-between items-start gap-1">
+                  <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'DIHUBUNGI' ? 'text-blue-100' : 'text-blue-500'}`}>Dihubungi</span>
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'DIHUBUNGI' ? 'bg-white' : 'bg-blue-500'}`} />
+                </div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className={`text-lg font-black ${selectedStatusFilter === 'DIHUBUNGI' ? 'text-white' : 'text-blue-700'}`}>{cityStats.dihubungi}</span>
+                  <span className={`text-[8px] font-medium ${selectedStatusFilter === 'DIHUBUNGI' ? 'text-blue-100' : 'text-blue-500'}`}>Prospek</span>
+                </div>
+              </button>
+
+              {/* FOLLOW UP */}
+              <button
+                type="button"
+                onClick={() => handleStatusCardClick('FOLLOW UP')}
+                title="Klik untuk menyaring status Follow Up"
+                className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                  selectedStatusFilter === 'FOLLOW UP'
+                    ? 'bg-amber-600 text-white border-2 border-amber-600 ring-2 ring-amber-300 shadow-sm scale-[1.02]'
+                    : 'bg-amber-50/30 border border-amber-100 hover:bg-amber-50 hover:border-amber-200'
+                }`}
+              >
+                <div className="flex justify-between items-start gap-1">
+                  <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'FOLLOW UP' ? 'text-amber-100' : 'text-amber-500'}`}>Follow Up</span>
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'FOLLOW UP' ? 'bg-white' : 'bg-amber-500'}`} />
+                </div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className={`text-lg font-black ${selectedStatusFilter === 'FOLLOW UP' ? 'text-white' : 'text-amber-700'}`}>{cityStats.followUp}</span>
+                  <span className={`text-[8px] font-medium ${selectedStatusFilter === 'FOLLOW UP' ? 'text-amber-100' : 'text-amber-500'}`}>Prospek</span>
+                </div>
+              </button>
+            </>
+          )}
+
+          {viewMode === 'prospects' && (
+            /* Total Prospect Card for Prospects View Mode */
+            <button
+              type="button"
+              onClick={() => handleStatusCardClick('')}
+              title="Klik untuk menampilkan semua prospek aktif"
+              className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                selectedStatusFilter === ''
+                  ? 'bg-indigo-900 text-white border-2 border-indigo-900 shadow-sm scale-[1.02]'
+                  : 'bg-indigo-50/50 border border-indigo-100 hover:bg-indigo-100/70 hover:border-indigo-200'
+              }`}
+            >
+              <div className="flex justify-between items-start">
+                <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === '' ? 'text-indigo-200' : 'text-indigo-500'}`}>Total Prospek</span>
+                {selectedStatusFilter === '' && <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />}
               </div>
-            )}
-          </div>
+              <div className="mt-1 flex items-baseline justify-between">
+                <span className={`text-lg font-black ${selectedStatusFilter === '' ? 'text-white' : 'text-indigo-900'}`}>{cityStats.prospek + cityStats.meetingVisit + cityStats.deal}</span>
+                <span className={`text-[8px] font-medium ${selectedStatusFilter === '' ? 'text-indigo-200' : 'text-indigo-500'}`}>Prospek</span>
+              </div>
+            </button>
+          )}
+
+          {/* PROSPEK */}
+          <button
+            type="button"
+            onClick={() => handleStatusCardClick('PROSPEK')}
+            title="Klik untuk menyaring status Prospek"
+            className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+              selectedStatusFilter === 'PROSPEK'
+                ? 'bg-indigo-600 text-white border-2 border-indigo-600 ring-2 ring-indigo-300 shadow-sm scale-[1.02]'
+                : 'bg-indigo-50/30 border border-indigo-100 hover:bg-indigo-50 hover:border-indigo-200'
+            }`}
+          >
+            <div className="flex justify-between items-start gap-1">
+              <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'PROSPEK' ? 'text-indigo-100' : 'text-indigo-500'}`}>Prospek</span>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'PROSPEK' ? 'bg-white' : 'bg-indigo-500'}`} />
+            </div>
+            <div className="mt-1 flex items-baseline justify-between">
+              <span className={`text-lg font-black ${selectedStatusFilter === 'PROSPEK' ? 'text-white' : 'text-indigo-700'}`}>{cityStats.prospek}</span>
+              <span className={`text-[8px] font-medium ${selectedStatusFilter === 'PROSPEK' ? 'text-indigo-100' : 'text-indigo-500'}`}>Prospek</span>
+            </div>
+          </button>
+
+          {/* MEETING / VISIT */}
+          <button
+            type="button"
+            onClick={() => handleStatusCardClick('MEETING / VISIT')}
+            title="Klik untuk menyaring status Meeting / Visit"
+            className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+              selectedStatusFilter === 'MEETING / VISIT'
+                ? 'bg-purple-600 text-white border-2 border-purple-600 ring-2 ring-purple-300 shadow-sm scale-[1.02]'
+                : 'bg-purple-50/30 border border-purple-100 hover:bg-purple-50 hover:border-purple-200'
+            }`}
+          >
+            <div className="flex justify-between items-start gap-1">
+              <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'MEETING / VISIT' ? 'text-purple-100' : 'text-purple-500'}`}>Meeting / Visit</span>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'MEETING / VISIT' ? 'bg-white' : 'bg-purple-500'}`} />
+            </div>
+            <div className="mt-1 flex items-baseline justify-between">
+              <span className={`text-lg font-black ${selectedStatusFilter === 'MEETING / VISIT' ? 'text-white' : 'text-purple-700'}`}>{cityStats.meetingVisit}</span>
+              <span className={`text-[8px] font-medium ${selectedStatusFilter === 'MEETING / VISIT' ? 'text-purple-100' : 'text-purple-500'}`}>Kunjungan</span>
+            </div>
+          </button>
+
+          {/* DEAL */}
+          <button
+            type="button"
+            onClick={() => handleStatusCardClick('DEAL')}
+            title="Klik untuk menyaring status Deal"
+            className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+              selectedStatusFilter === 'DEAL'
+                ? 'bg-emerald-600 text-white border-2 border-emerald-600 ring-2 ring-emerald-300 shadow-sm scale-[1.02]'
+                : 'bg-emerald-50/30 border border-emerald-100 hover:bg-emerald-50 hover:border-emerald-200'
+            }`}
+          >
+            <div className="flex justify-between items-start gap-1">
+              <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'DEAL' ? 'text-emerald-100' : 'text-emerald-500'}`}>Deal</span>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'DEAL' ? 'bg-white' : 'bg-emerald-500'}`} />
+            </div>
+            <div className="mt-1 flex items-baseline justify-between">
+              <span className={`text-lg font-black ${selectedStatusFilter === 'DEAL' ? 'text-white' : 'text-emerald-700'}`}>{cityStats.deal}</span>
+              <span className={`text-[8px] font-medium ${selectedStatusFilter === 'DEAL' ? 'text-emerald-100' : 'text-emerald-500'}`}>Sukses</span>
+            </div>
+          </button>
+
+          {viewMode === 'database' && (
+            /* LOST */
+            <button
+              type="button"
+              onClick={() => handleStatusCardClick('LOST')}
+              title="Klik untuk menyaring status Lost"
+              className={`p-2.5 rounded-xl text-left flex flex-col justify-between min-h-[68px] transition-all cursor-pointer select-none ${
+                selectedStatusFilter === 'LOST'
+                  ? 'bg-rose-600 text-white border-2 border-rose-600 ring-2 ring-rose-300 shadow-sm scale-[1.02]'
+                  : 'bg-rose-50/30 border border-rose-100 hover:bg-rose-50 hover:border-rose-200'
+              }`}
+            >
+              <div className="flex justify-between items-start gap-1">
+                <span className={`text-[8px] font-extrabold uppercase tracking-widest ${selectedStatusFilter === 'LOST' ? 'text-rose-100' : 'text-rose-500'}`}>Lost</span>
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${selectedStatusFilter === 'LOST' ? 'bg-white' : 'bg-rose-500'}`} />
+              </div>
+              <div className="mt-1 flex items-baseline justify-between">
+                <span className={`text-lg font-black ${selectedStatusFilter === 'LOST' ? 'text-white' : 'text-rose-700'}`}>{cityStats.lost}</span>
+                <span className={`text-[8px] font-medium ${selectedStatusFilter === 'LOST' ? 'text-rose-100' : 'text-rose-500'}`}>Batal</span>
+              </div>
+            </button>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Success Notification Alert */}
       {successMsg && (
@@ -1237,22 +1716,56 @@ export default function SchoolList({
               className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-sm transition-all"
             />
           </div>
-          
-          {/* Hide/Show Advanced Filters option only relevant in Prospect Mode */}
-          {viewMode === 'prospects' && (
-            <button
-              onClick={() => setShowAdvanceFilters(!showAdvanceFilters)}
-              id="toggle-advance-filters"
-              className={`px-4 py-2.5 rounded-xl border flex items-center justify-center space-x-2 text-xs font-bold transition-all cursor-pointer ${
-                showAdvanceFilters 
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-              }`}
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-              <span className="hidden sm:inline">Filter Lanjutan</span>
-            </button>
-          )}
+
+          <div className="flex items-center gap-2 shrink-0">
+            {/* View Layout Switcher (Grid vs List) */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200" id="view-layout-toggle-group">
+              <button
+                type="button"
+                id="view-layout-grid-btn"
+                onClick={() => setLayoutMode('grid')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  layoutMode === 'grid'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+                title="Tampilan Grid Layout"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Grid Layout</span>
+              </button>
+              <button
+                type="button"
+                id="view-layout-list-btn"
+                onClick={() => setLayoutMode('list')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  layoutMode === 'list'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+                title="Tampilan List Layout"
+              >
+                <List className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">List Layout</span>
+              </button>
+            </div>
+
+            {/* Hide/Show Advanced Filters option only relevant in Prospect Mode */}
+            {viewMode === 'prospects' && (
+              <button
+                onClick={() => setShowAdvanceFilters(!showAdvanceFilters)}
+                id="toggle-advance-filters"
+                className={`px-3.5 py-2 rounded-xl border flex items-center justify-center space-x-1.5 text-xs font-bold transition-all cursor-pointer ${
+                  showAdvanceFilters 
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                }`}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Filter Lanjutan</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Level Filters Quick Chips */}
@@ -1272,6 +1785,51 @@ export default function SchoolList({
               {lvl === 'ALL' ? 'Semua' : lvl}
             </button>
           ))}
+        </div>
+
+        {/* Sort Controls Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-100" id="sort-controls-bar">
+          <div className="flex items-center space-x-2">
+            <ArrowUpDown className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Urutkan Berdasarkan:</span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            <div className="flex items-center space-x-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Sort:</span>
+              <select
+                id="sort-by-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'name' | 'status' | 'pic' | 'update')}
+                className="bg-transparent text-slate-800 text-xs font-bold focus:outline-hidden cursor-pointer"
+              >
+                <option value="name">Nama Sekolah Target</option>
+                <option value="status">Status Marketing</option>
+                <option value="pic">PIC Marketing / AE</option>
+                <option value="update">Update Terakhir / Follow Up</option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              id="sort-order-toggle-btn"
+              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+              className="py-1 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+              title={sortOrder === 'asc' ? 'Urutan Terendah/Awal ke Tertinggi/Akhir' : 'Urutan Tertinggi/Akhir ke Terendah/Awal'}
+            >
+              {sortOrder === 'asc' ? (
+                <>
+                  <ArrowUp className="h-3.5 w-3.5 text-indigo-600" />
+                  <span>{sortBy === 'update' ? 'Terlama Pertama' : 'A → Z'}</span>
+                </>
+              ) : (
+                <>
+                  <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />
+                  <span>{sortBy === 'update' ? 'Terbaru Pertama' : 'Z → A'}</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Collapsible Advanced Filters (Only for Active prospects mode) */}
@@ -1334,16 +1892,12 @@ export default function SchoolList({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center text-xs text-slate-500 px-1 gap-1" id="filter-stats-text">
         {viewMode === 'database' ? (
           <span>
-            {selectedProvince && selectedCity ? (
-              <>
-                Ditemukan <b className="text-indigo-600 font-extrabold">{cityStats.total}</b> sekolah target di <b>{selectedCity}</b>: {' '}
-                <b className="text-emerald-600 font-bold">{cityStats.activeCount} aktif diprospek</b>, {cityStats.pendingCount} belum dihubungi.
-              </>
-            ) : (
-              <span className="text-amber-600 font-semibold flex items-center gap-1">
-                <MapPin className="h-3 w-3" /> Silakan pilih Provinsi & Kota/Kabupaten pada panel di atas untuk eksplorasi.
-              </span>
-            )}
+            Ditemukan <b className="text-indigo-600 font-extrabold">{cityStats.total}</b> sekolah target
+            {selectedProvince && selectedCity && <> di <b>{selectedCity}</b>, <b>{selectedProvince}</b></>}
+            {selectedProvince && !selectedCity && <> di <b>{selectedProvince}</b> (Semua Kota/Kabupaten)</>}
+            {!selectedProvince && selectedCity && <> di <b>{selectedCity}</b></>}
+            {!selectedProvince && !selectedCity && <> secara keseluruhan (Semua Wilayah)</>}
+            : {' '}<b className="text-emerald-600 font-bold">{cityStats.activeCount} aktif diprospek</b>, {cityStats.pendingCount} belum dihubungi.
           </span>
         ) : (
           <span>
@@ -1370,304 +1924,613 @@ export default function SchoolList({
         )}
       </div>
 
-      {/* Main Grid: Shows pre-surveyed target database OR flat active prospects list */}
-      {viewMode === 'database' && (!selectedProvince || !selectedCity) && !search.trim() ? (
-        <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-12 text-center space-y-4 shadow-2xs">
-          <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto border border-indigo-100">
-            <MapPin className="h-6 w-6" />
-          </div>
-          <div className="max-w-md mx-auto space-y-1">
-            <h4 className="font-extrabold text-slate-800 text-sm">Pilih Wilayah Terlebih Dahulu</h4>
-            <p className="text-slate-400 text-xs">
-              Silakan pilih provinsi dan kota/kabupaten pada panel wilayah di atas untuk mulai menjelajahi database sekolah sasaran.
+      {/* Main Container: Grid or List Layout depending on layoutMode */}
+      {paginatedSchools.length === 0 ? (
+        !selectedAcademicYearFilter ? (
+          <div className="bg-amber-50/50 border-2 border-dashed border-amber-200/80 rounded-2xl p-10 text-center space-y-3 shadow-2xs" id="no-periode-empty">
+            <div className="w-12 h-12 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto shadow-xs">
+              <Calendar className="h-6 w-6" />
+            </div>
+            <h4 className="font-extrabold text-slate-800 text-base">Periode Belum Dipilih</h4>
+            <p className="text-slate-500 text-xs max-w-md mx-auto leading-relaxed">
+              Silakan tentukan <span className="font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded">Periode (Tahun Ajaran)</span> pada menu filter di kanan atas header untuk mulai menampilkan & mengelola data sekolah target.
             </p>
           </div>
-        </div>
-      ) : (
+        ) : (
+          <div className="bg-white border border-dashed border-slate-200 rounded-2xl p-12 text-center space-y-3 shadow-2xs" id="no-schools-empty">
+            <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
+              <Search className="h-6 w-6" />
+            </div>
+            <h4 className="font-extrabold text-slate-700 text-sm">Tidak Ada Sekolah Target Ditemukan</h4>
+            <p className="text-slate-400 text-xs max-w-sm mx-auto">
+              Tidak ada sekolah target yang cocok dengan filter atau kriteria wilayah yang Anda pilih pada periode ini.
+            </p>
+          </div>
+        )
+      ) : layoutMode === 'grid' ? (
+        /* --- GRID LAYOUT MODE --- */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="schools-grid">
           {viewMode === 'database' ? (
-            // --- DATABASE MODE CARDS RENDERING ---
-            paginatedSchools.map((item: any) => {
-            const sch = item.surveyed;
-            const activeRecord: SchoolRecord | null = item.active;
-            const isMatched = item.isMatched;
+            paginatedSchools.map((item: any, idx: number) => {
+              const sch = item.surveyed;
+              const activeRecord: SchoolRecord | null = item.active;
+              const isMatched = item.isMatched;
 
-            return (
-              <div
-                key={`db-${sch.name}`}
-                id={`target-card-${sch.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
-                className={`p-5 rounded-2xl border transition-all duration-200 flex flex-col justify-between ${
-                  isMatched 
-                    ? 'bg-white border-slate-200/80 shadow-2xs hover:border-indigo-200 hover:shadow-xs' 
-                    : 'bg-slate-50/50 border-dashed border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-                }`}
-              >
-                <div>
-                  {/* Status Banner */}
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[10px] font-mono font-bold text-slate-400 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full uppercase tracking-wider flex items-center">
-                      <MapPin className="h-2.5 w-2.5 mr-1 text-slate-400" />
-                      {selectedCity}
-                    </span>
-                    {isMatched && activeRecord ? (
-                      <div className="flex space-x-1.5">
-                        {activeRecord.kemungkinanClosing && (
-                          <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getProbabilityBadgeStyle(activeRecord.kemungkinanClosing)}`}>
-                            {activeRecord.kemungkinanClosing}
-                          </span>
-                        )}
-                        <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getStatusBadgeStyle(activeRecord.status)}`}>
-                          {activeRecord.status}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="px-2 py-0.5 text-[9px] font-bold border border-slate-200 text-slate-400 bg-white rounded-md uppercase tracking-wider">
-                        Belum Diprospek
+              return (
+                <div
+                  key={`db-${sch.name}-${item.city || ''}-${activeRecord?.no || idx}-${idx}`}
+                  id={`target-card-${sch.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+                  className={`p-5 rounded-2xl border transition-all duration-200 flex flex-col justify-between ${
+                    isMatched 
+                      ? 'bg-white border-slate-200/80 shadow-2xs hover:border-indigo-200 hover:shadow-xs' 
+                      : 'bg-slate-50/50 border-dashed border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    {/* Status Banner */}
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[10px] font-mono font-bold text-slate-400 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full uppercase tracking-wider flex items-center">
+                        <MapPin className="h-2.5 w-2.5 mr-1 text-slate-400" />
+                        {item.city || selectedCity}
                       </span>
-                    )}
-                  </div>
-
-                  {/* School Name */}
-                  <h3 className="text-base font-extrabold text-slate-800 line-clamp-1">
-                    {sch.name}
-                  </h3>
-
-                  {/* Social Media Link */}
-                  <div className="mt-2.5 flex items-center space-x-1.5">
-                    {sch.instagram ? (
-                      <a
-                        href={`https://instagram.com/${sch.instagram.replace('@', '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
-                      >
-                        <Instagram className="h-3.5 w-3.5" />
-                        <span>{sch.instagram}</span>
-                        <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    ) : (
-                      <p className="text-[10px] text-slate-400 italic">Akun IG belum disurvey</p>
-                    )}
-                  </div>
-
-                  {/* Assigned PIC and last comment if active */}
-                  {isMatched && activeRecord ? (
-                    <div className="mt-4 pt-3.5 border-t border-slate-100 space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <div className="h-5 w-5 rounded bg-indigo-50 text-[9px] font-bold text-indigo-600 flex items-center justify-center border border-indigo-100">
-                          {activeRecord.picMarketing ? activeRecord.picMarketing.substring(0, 2).toUpperCase() : '??'}
+                      {isMatched && activeRecord ? (
+                        <div className="flex space-x-1.5">
+                          {activeRecord.kemungkinanClosing && (
+                            <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getProbabilityBadgeStyle(activeRecord.kemungkinanClosing)}`}>
+                              {activeRecord.kemungkinanClosing}
+                            </span>
+                          )}
+                          <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getStatusBadgeStyle(activeRecord.status)}`}>
+                            {activeRecord.status}
+                          </span>
                         </div>
-                        <p className="text-[11px] text-slate-600 font-semibold">
-                          PIC: <span className="font-extrabold text-slate-800">{activeRecord.picMarketing || 'Belum ditugaskan'}</span>
-                        </p>
-                      </div>
-
-                      {activeRecord.updates && activeRecord.updates.length > 0 ? (
-                        <p className="text-xs text-slate-500 italic line-clamp-1 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                          "{activeRecord.updates[activeRecord.updates.length - 1]}"
-                        </p>
-                      ) : activeRecord.catatanAwal ? (
-                        <p className="text-xs text-slate-500 italic line-clamp-1 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                          "{activeRecord.catatanAwal}"
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="mt-4 pt-4 border-t border-slate-100/60">
-                      <p className="text-[10px] text-slate-400 font-medium leading-relaxed italic">
-                        Sekolah ini tersedia di database survey. Klik tombol di bawah untuk mulai memprospek sekolah ini.
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Footer Buttons */}
-                <div className="mt-5">
-                  {isMatched && activeRecord ? (
-                    <button
-                      onClick={() => onSelectSchool(activeRecord)}
-                      className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
-                    >
-                      <Calendar className="h-3.5 w-3.5 text-slate-500" />
-                      <span>Update Progress (AE)</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleActivateProspect(sch)}
-                      className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-all shadow-2xs hover:shadow-sm flex items-center justify-center space-x-1.5 cursor-pointer active:scale-97"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>Mulai Prospek (Aktifkan)</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          // --- PROSPECT MODE CARDS RENDERING (Original active list) ---
-          paginatedSchools.map((school: any) => {
-            const mainContact = getFirstContactPhone(school);
-            const hasInsta = !!school.instagramHandle;
-            const lastUpdate = school.updates && school.updates.length > 0 
-              ? school.updates[school.updates.length - 1] 
-              : null;
-
-            return (
-              <div
-                key={`${school.no}-${school.namaSekolah}`}
-                id={`school-card-${school.no}`}
-                onClick={() => onSelectSchool(school)}
-                className="bg-white p-5 rounded-2xl border border-slate-200 hover:border-slate-300 hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col justify-between group"
-              >
-                <div>
-                  {/* Card Header: NO & Status Badge */}
-                  <div className="flex items-center justify-between mb-3.5">
-                    <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-50 border border-slate-200 px-2.5 py-0.5 rounded-full">
-                      NO. {school.no}
-                    </span>
-                    <div className="flex space-x-1.5">
-                      {school.kemungkinanClosing && (
-                        <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getProbabilityBadgeStyle(school.kemungkinanClosing)}`}>
-                          {school.kemungkinanClosing}
+                      ) : (
+                        <span className="px-2 py-0.5 text-[9px] font-bold border border-slate-200 text-slate-400 bg-white rounded-md uppercase tracking-wider">
+                          Belum Diprospek
                         </span>
                       )}
-                      <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getStatusBadgeStyle(school.status)}`}>
-                        {school.status}
-                      </span>
                     </div>
-                  </div>
 
-                  {/* School Name */}
-                  <h3 className="text-base font-bold text-slate-900 line-clamp-1 group-hover:text-indigo-600 transition-colors">
-                    {school.namaSekolah}
-                  </h3>
+                    {/* School Name */}
+                    <h3 className="text-base font-extrabold text-slate-800 line-clamp-1">
+                      {sch.name}
+                    </h3>
 
-                  {school.kota && (
-                    <span className="inline-flex items-center text-[9px] text-indigo-600 font-extrabold bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md mt-1 mb-2.5 uppercase tracking-wider">
-                      <MapPin className="h-2.5 w-2.5 mr-1" />
-                      {school.kota}
-                    </span>
-                  )}
+                    {/* Social Media Link */}
+                    <div className="mt-2.5 flex items-center space-x-1.5">
+                      {sch.instagram ? (
+                        <a
+                          href={`https://instagram.com/${sch.instagram.replace('@', '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
+                        >
+                          <Instagram className="h-3.5 w-3.5" />
+                          <span>{sch.instagram}</span>
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 italic">Akun IG belum disurvey</p>
+                      )}
+                    </div>
 
-                  {/* Instagram & TikTok Handles & Direct Launch */}
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {hasInsta ? (
-                      <a
-                        href={`https://instagram.com/${school.instagramHandle?.replace('@', '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
-                      >
-                        <Instagram className="h-3.5 w-3.5" />
-                        <span>{school.instagramHandle}</span>
-                        <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    ) : null}
+                    {/* Assigned PIC and last comment if active */}
+                    {isMatched && activeRecord ? (
+                      <div className="mt-4 pt-3.5 border-t border-slate-100 space-y-2">
+                        <div className="flex items-center space-x-2">
+                          <div className="h-5 w-5 rounded bg-indigo-50 text-[9px] font-bold text-indigo-600 flex items-center justify-center border border-indigo-100">
+                            {activeRecord.picMarketing ? activeRecord.picMarketing.substring(0, 2).toUpperCase() : '??'}
+                          </div>
+                          <p className="text-[11px] text-slate-600 font-semibold">
+                            PIC: <span className="font-extrabold text-slate-800">{activeRecord.picMarketing || 'Belum ditugaskan'}</span>
+                          </p>
+                        </div>
 
-                    {school.tiktokHandle ? (
-                      <a
-                        href={`https://tiktok.com/@${school.tiktokHandle?.replace('@', '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center space-x-1 text-xs text-slate-800 font-semibold hover:underline"
-                      >
-                        <span className="font-bold text-[10px] bg-slate-900 text-white px-1 rounded-sm">T</span>
-                        <span>{school.tiktokHandle}</span>
-                        <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    ) : null}
-
-                    {!hasInsta && !school.tiktokHandle && (
-                      <p className="text-[11px] text-slate-400 italic font-medium">Sosial Media Kosong</p>
+                        {activeRecord.updates && activeRecord.updates.length > 0 ? (
+                          <p className="text-xs text-slate-500 italic line-clamp-1 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                            "{activeRecord.updates[activeRecord.updates.length - 1]}"
+                          </p>
+                        ) : activeRecord.catatanAwal ? (
+                          <p className="text-xs text-slate-500 italic line-clamp-1 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                            "{activeRecord.catatanAwal}"
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="mt-4 pt-4 border-t border-slate-100/60">
+                        <p className="text-[10px] text-slate-400 font-medium leading-relaxed italic">
+                          Sekolah ini tersedia di database survey. Klik tombol di bawah untuk mulai memprospek sekolah ini.
+                        </p>
+                      </div>
                     )}
                   </div>
 
-                  {/* AE / PIC & Marketing Lapangan assignment */}
-                  <div className="grid grid-cols-2 gap-2 mt-4">
-                    <div className="flex items-center space-x-2 bg-slate-50/80 p-2 rounded-xl border border-slate-200/60">
-                      <div className="h-6 w-6 rounded-lg bg-indigo-100 flex items-center justify-center text-[10px] font-bold text-indigo-700 uppercase shadow-2xs shrink-0">
-                        {school.picMarketing ? school.picMarketing.substring(0, 2) : '??'}
-                      </div>
-                      <div className="text-[10px] min-w-0">
-                        <p className="text-slate-400 text-[8px] uppercase tracking-wider font-extrabold truncate">AE / PIC</p>
-                        <p className="text-slate-700 font-bold truncate">{school.picMarketing || '-'}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center space-x-2 bg-slate-50/80 p-2 rounded-xl border border-slate-200/60">
-                      <div className="h-6 w-6 rounded-lg bg-emerald-100 flex items-center justify-center text-[10px] font-bold text-emerald-700 uppercase shadow-2xs shrink-0">
-                        {school.marketingLapangan ? school.marketingLapangan.substring(0, 2) : '??'}
-                      </div>
-                      <div className="text-[10px] min-w-0">
-                        <p className="text-slate-400 text-[8px] uppercase tracking-wider font-extrabold truncate">Mkt Lapangan</p>
-                        <p className="text-slate-700 font-bold truncate">{school.marketingLapangan || '-'}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Last Update Snippet */}
-                  {lastUpdate ? (
-                    <div className="mt-4 border-l-2 border-indigo-500 pl-3">
-                      <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wider flex items-center">
-                        <Calendar className="h-3 w-3 mr-1 text-indigo-500" /> Update Terakhir
-                      </p>
-                      <p className="text-xs text-slate-600 line-clamp-2 mt-0.5 italic">
-                        "{lastUpdate}"
-                      </p>
-                    </div>
-                  ) : school.catatanAwal ? (
-                    <div className="mt-4 border-l-2 border-slate-300 pl-3">
-                      <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Catatan Awal</p>
-                      <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">
-                        "{school.catatanAwal}"
-                      </p>
-                    </div>
-                  ) : null}
-                </div>
-
-                {/* Card Footer: Quick Contacts & Date */}
-                <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-semibold">
-                  <span>
-                    {school.tanggalFollowUpTerakhir ? `F/U: ${formatIndonesianDate(school.tanggalFollowUpTerakhir)}` : school.tanggalKontakAwal ? `Awal: ${formatIndonesianDate(school.tanggalKontakAwal)}` : 'Belum kontak'}
-                  </span>
-
-                  <div className="flex space-x-1.5" onClick={(e) => e.stopPropagation()}>
-                    {/* WhatsApp Launcher */}
-                    {mainContact && (
-                      <a
-                        href={generateWhatsAppLink(mainContact.num, school.namaSekolah, school.status)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={`Hubungi ${mainContact.label}`}
-                        className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg border border-emerald-100 transition-all shadow-2xs"
-                      >
-                        <MessageSquare className="h-3.5 w-3.5" />
-                      </a>
-                    )}
-
-                    {/* Manual Quick Copy */}
-                    {mainContact && (
+                  {/* Footer Buttons */}
+                  <div className="mt-5">
+                    {isMatched && activeRecord ? (
                       <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(mainContact.label);
-                          alert(`Nomor disalin: ${mainContact.label}`);
-                        }}
-                        title="Salin nomor kontak"
-                        className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-600 rounded-lg border border-sky-100 transition-all shadow-2xs cursor-pointer"
+                        onClick={() => onSelectSchool(activeRecord)}
+                        className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
                       >
-                        <Phone className="h-3.5 w-3.5" />
+                        <Calendar className="h-3.5 w-3.5 text-slate-500" />
+                        <span>Update Progress (AE)</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleActivateProspect(sch)}
+                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-all shadow-2xs hover:shadow-sm flex items-center justify-center space-x-1.5 cursor-pointer active:scale-97"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>Mulai Prospek (Aktifkan)</span>
                       </button>
                     )}
                   </div>
                 </div>
-              </div>
-            );
-          })
-        )}
-      </div>
+              );
+            })
+          ) : (
+            paginatedSchools.map((school: any, idx: number) => {
+              const mainContact = getFirstContactPhone(school);
+              const hasInsta = !!school.instagramHandle;
+              const lastUpdate = school.updates && school.updates.length > 0 
+                ? school.updates[school.updates.length - 1] 
+                : null;
+
+              return (
+                <div
+                  key={`prospect-${school.no || idx}-${school.namaSekolah}-${idx}`}
+                  id={`school-card-${school.no}`}
+                  onClick={() => onSelectSchool(school)}
+                  className="bg-white p-5 rounded-2xl border border-slate-200 hover:border-slate-300 hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col justify-between group"
+                >
+                  <div>
+                    {/* Card Header: NO & Status Badge */}
+                    <div className="flex items-center justify-between mb-3.5">
+                      <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-50 border border-slate-200 px-2.5 py-0.5 rounded-full">
+                        NO. {school.no}
+                      </span>
+                      <div className="flex space-x-1.5">
+                        {school.kemungkinanClosing && (
+                          <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getProbabilityBadgeStyle(school.kemungkinanClosing)}`}>
+                            {school.kemungkinanClosing}
+                          </span>
+                        )}
+                        <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase tracking-wider ${getStatusBadgeStyle(school.status)}`}>
+                          {school.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* School Name */}
+                    <h3 className="text-base font-bold text-slate-900 line-clamp-1 group-hover:text-indigo-600 transition-colors">
+                      {school.namaSekolah}
+                    </h3>
+
+                    {school.kota && (
+                      <span className="inline-flex items-center text-[9px] text-indigo-600 font-extrabold bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md mt-1 mb-2.5 uppercase tracking-wider">
+                        <MapPin className="h-2.5 w-2.5 mr-1" />
+                        {school.kota}
+                      </span>
+                    )}
+
+                    {/* Instagram & TikTok Handles & Direct Launch */}
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {hasInsta ? (
+                        <a
+                          href={`https://instagram.com/${school.instagramHandle?.replace('@', '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
+                        >
+                          <Instagram className="h-3.5 w-3.5" />
+                          <span>{school.instagramHandle}</span>
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      ) : null}
+
+                      {school.tiktokHandle ? (
+                        <a
+                          href={`https://tiktok.com/@${school.tiktokHandle?.replace('@', '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center space-x-1 text-xs text-slate-800 font-semibold hover:underline"
+                        >
+                          <span className="font-bold text-[10px] bg-slate-900 text-white px-1 rounded-sm">T</span>
+                          <span>{school.tiktokHandle}</span>
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      ) : null}
+
+                      {!hasInsta && !school.tiktokHandle && (
+                        <p className="text-[11px] text-slate-400 italic font-medium">Sosial Media Kosong</p>
+                      )}
+                    </div>
+
+                    {/* AE / PIC & Marketing Lapangan assignment */}
+                    <div className="grid grid-cols-2 gap-2 mt-4">
+                      <div className="flex items-center space-x-2 bg-slate-50/80 p-2 rounded-xl border border-slate-200/60">
+                        <div className="h-6 w-6 rounded-lg bg-indigo-100 flex items-center justify-center text-[10px] font-bold text-indigo-700 uppercase shadow-2xs shrink-0">
+                          {school.picMarketing ? school.picMarketing.substring(0, 2) : '??'}
+                        </div>
+                        <div className="text-[10px] min-w-0">
+                          <p className="text-slate-400 text-[8px] uppercase tracking-wider font-extrabold truncate">AE / PIC</p>
+                          <p className="text-slate-700 font-bold truncate">{school.picMarketing || '-'}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 bg-slate-50/80 p-2 rounded-xl border border-slate-200/60">
+                        <div className="h-6 w-6 rounded-lg bg-emerald-100 flex items-center justify-center text-[10px] font-bold text-emerald-700 uppercase shadow-2xs shrink-0">
+                          {school.marketingLapangan ? school.marketingLapangan.substring(0, 2) : '??'}
+                        </div>
+                        <div className="text-[10px] min-w-0">
+                          <p className="text-slate-400 text-[8px] uppercase tracking-wider font-extrabold truncate">Mkt Lapangan</p>
+                          <p className="text-slate-700 font-bold truncate">{school.marketingLapangan || '-'}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Last Update Snippet */}
+                    {lastUpdate ? (
+                      <div className="mt-4 border-l-2 border-indigo-500 pl-3">
+                        <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wider flex items-center">
+                          <Calendar className="h-3 w-3 mr-1 text-indigo-500" /> Update Terakhir
+                        </p>
+                        <p className="text-xs text-slate-600 line-clamp-2 mt-0.5 italic">
+                          "{lastUpdate}"
+                        </p>
+                      </div>
+                    ) : school.catatanAwal ? (
+                      <div className="mt-4 border-l-2 border-slate-300 pl-3">
+                        <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Catatan Awal</p>
+                        <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">
+                          "{school.catatanAwal}"
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Card Footer: Quick Contacts & Date */}
+                  <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-semibold">
+                    <span>
+                      {school.tanggalFollowUpTerakhir ? `F/U: ${school.tanggalFollowUpTerakhir}` : school.tanggalKontakAwal ? `Awal: ${school.tanggalKontakAwal}` : 'Belum kontak'}
+                    </span>
+
+                    <div className="flex space-x-1.5" onClick={(e) => e.stopPropagation()}>
+                      {/* WhatsApp Launcher */}
+                      {mainContact && (
+                        <a
+                          href={generateWhatsAppLink(mainContact.num, school.namaSekolah, school.status)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Hubungi ${mainContact.label}`}
+                          className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg border border-emerald-100 transition-all shadow-2xs"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+
+                      {/* Manual Quick Copy */}
+                      {mainContact && (
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(mainContact.label);
+                            alert(`Nomor disalin: ${mainContact.label}`);
+                          }}
+                          title="Salin nomor kontak"
+                          className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-600 rounded-lg border border-sky-100 transition-all shadow-2xs cursor-pointer"
+                        >
+                          <Phone className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      ) : (
+        /* --- LIST LAYOUT MODE (TABLE VIEW) --- */
+        <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs" id="schools-list-table">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 font-extrabold border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4">
+                    {viewMode === 'database' ? 'No & Wilayah' : 'No & Status'}
+                  </th>
+                  <th 
+                    className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                    onClick={() => {
+                      if (sortBy === 'name') setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                      else { setSortBy('name'); setSortOrder('asc'); }
+                    }}
+                  >
+                    <div className="flex items-center space-x-1">
+                      <span>Nama Sekolah Target</span>
+                      {sortBy === 'name' && (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      )}
+                    </div>
+                  </th>
+                  <th className="py-3 px-4">Social Media</th>
+                  <th 
+                    className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                    onClick={() => {
+                      const targetField = viewMode === 'database' ? 'status' : 'pic';
+                      if (sortBy === targetField) setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                      else { setSortBy(targetField); setSortOrder('asc'); }
+                    }}
+                  >
+                    <div className="flex items-center space-x-1">
+                      <span>{viewMode === 'database' ? 'Status Marketing' : 'PIC / AE Marketing'}</span>
+                      {sortBy === (viewMode === 'database' ? 'status' : 'pic') && (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                    onClick={() => {
+                      if (sortBy === 'update') setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                      else { setSortBy('update'); setSortOrder('desc'); }
+                    }}
+                  >
+                    <div className="flex items-center space-x-1">
+                      <span>{viewMode === 'database' ? 'PIC & Update Terakhir' : 'Update Terakhir'}</span>
+                      {sortBy === 'update' && (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      )}
+                    </div>
+                  </th>
+                  <th className="py-3 px-4 text-right">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                {viewMode === 'database' ? (
+                  paginatedSchools.map((item: any, idx: number) => {
+                    const sch = item.surveyed;
+                    const activeRecord: SchoolRecord | null = item.active;
+                    const isMatched = item.isMatched;
+                    const rowNum = (currentPage - 1) * itemsPerPage + idx + 1;
+
+                    return (
+                      <tr key={`db-row-${sch.name}-${item.city || ''}-${activeRecord?.no || idx}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-4 font-bold text-slate-500 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                              #{rowNum}
+                            </span>
+                            <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md flex items-center">
+                              <MapPin className="h-2.5 w-2.5 mr-1 text-slate-400" />
+                              {item.city || selectedCity}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 font-extrabold text-slate-900">
+                          {sch.name}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {sch.instagram ? (
+                            <a
+                              href={`https://instagram.com/${sch.instagram.replace('@', '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
+                            >
+                              <Instagram className="h-3.5 w-3.5" />
+                              <span>{sch.instagram}</span>
+                            </a>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic">-</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {isMatched && activeRecord ? (
+                            <div className="flex items-center space-x-1.5">
+                              {activeRecord.kemungkinanClosing && (
+                                <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase ${getProbabilityBadgeStyle(activeRecord.kemungkinanClosing)}`}>
+                                  {activeRecord.kemungkinanClosing}
+                                </span>
+                              )}
+                              <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-md uppercase ${getStatusBadgeStyle(activeRecord.status)}`}>
+                                {activeRecord.status}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="px-2 py-0.5 text-[9px] font-bold border border-slate-200 text-slate-400 bg-slate-50 rounded-md uppercase">
+                              Belum Diprospek
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          {isMatched && activeRecord ? (
+                            <div className="space-y-0.5 max-w-xs">
+                              <p className="text-[11px] font-bold text-slate-800">
+                                PIC: {activeRecord.picMarketing || 'Belum Ditugaskan'}
+                              </p>
+                              {activeRecord.updates && activeRecord.updates.length > 0 ? (
+                                <p className="text-[10px] text-slate-500 italic truncate">
+                                  "{activeRecord.updates[activeRecord.updates.length - 1]}"
+                                </p>
+                              ) : activeRecord.catatanAwal ? (
+                                <p className="text-[10px] text-slate-500 italic truncate">
+                                  "{activeRecord.catatanAwal}"
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 italic">-</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          {isMatched && activeRecord ? (
+                            <button
+                              onClick={() => onSelectSchool(activeRecord)}
+                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 transition-all inline-flex items-center space-x-1 cursor-pointer"
+                            >
+                              <Calendar className="h-3 w-3 text-slate-500" />
+                              <span>Update</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleActivateProspect(sch)}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg transition-all shadow-2xs inline-flex items-center space-x-1 cursor-pointer active:scale-95"
+                            >
+                              <Plus className="h-3 w-3" />
+                              <span>Mulai Prospek</span>
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  paginatedSchools.map((school: any, idx: number) => {
+                    const mainContact = getFirstContactPhone(school);
+                    const hasInsta = !!school.instagramHandle;
+                    const lastUpdate = school.updates && school.updates.length > 0 
+                      ? school.updates[school.updates.length - 1] 
+                      : null;
+
+                    return (
+                      <tr 
+                        key={`prospect-row-${school.no || idx}-${school.namaSekolah}-${idx}`}
+                        onClick={() => onSelectSchool(school)}
+                        className="hover:bg-indigo-50/40 transition-colors cursor-pointer"
+                      >
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="flex flex-col space-y-1">
+                            <span className="text-[10px] font-mono font-bold text-slate-500">
+                              NO. {school.no}
+                            </span>
+                            <div className="flex items-center space-x-1">
+                              {school.kemungkinanClosing && (
+                                <span className={`px-1.5 py-0.5 text-[8px] font-bold border rounded uppercase ${getProbabilityBadgeStyle(school.kemungkinanClosing)}`}>
+                                  {school.kemungkinanClosing}
+                                </span>
+                              )}
+                              <span className={`px-1.5 py-0.5 text-[8px] font-bold border rounded uppercase ${getStatusBadgeStyle(school.status)}`}>
+                                {school.status}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <p className="font-extrabold text-slate-900 hover:text-indigo-600 transition-colors">
+                            {school.namaSekolah}
+                          </p>
+                          {school.kota && (
+                            <span className="inline-flex items-center text-[9px] text-indigo-600 font-bold bg-indigo-50 px-1.5 py-0.5 rounded mt-0.5 uppercase">
+                              <MapPin className="h-2.5 w-2.5 mr-0.5" />
+                              {school.kota}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="flex flex-col space-y-1">
+                            {hasInsta ? (
+                              <a
+                                href={`https://instagram.com/${school.instagramHandle?.replace('@', '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
+                              >
+                                <Instagram className="h-3 w-3" />
+                                <span>{school.instagramHandle}</span>
+                              </a>
+                            ) : null}
+
+                            {school.tiktokHandle ? (
+                              <a
+                                href={`https://tiktok.com/@${school.tiktokHandle?.replace('@', '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center space-x-1 text-xs text-slate-800 font-semibold hover:underline"
+                              >
+                                <span className="font-bold text-[9px] bg-slate-900 text-white px-1 rounded-xs">T</span>
+                                <span>{school.tiktokHandle}</span>
+                              </a>
+                            ) : null}
+
+                            {!hasInsta && !school.tiktokHandle && (
+                              <span className="text-[10px] text-slate-400 italic">-</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-bold text-slate-800">
+                              {school.picMarketing || 'Belum Ada PIC'}
+                            </p>
+                            {school.marketingLapangan && (
+                              <p className="text-[10px] text-slate-500">
+                                Lap: <span className="font-semibold text-slate-700">{school.marketingLapangan}</span>
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="max-w-xs space-y-0.5">
+                            <p className="text-[10px] font-bold text-slate-400">
+                              {school.tanggalFollowUpTerakhir ? `F/U: ${school.tanggalFollowUpTerakhir}` : school.tanggalKontakAwal ? `Awal: ${school.tanggalKontakAwal}` : '-'}
+                            </p>
+                            {lastUpdate ? (
+                              <p className="text-xs text-slate-600 italic truncate">
+                                "{lastUpdate}"
+                              </p>
+                            ) : school.catatanAwal ? (
+                              <p className="text-xs text-slate-500 italic truncate">
+                                "{school.catatanAwal}"
+                              </p>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end space-x-1.5" onClick={(e) => e.stopPropagation()}>
+                            {mainContact && (
+                              <a
+                                href={generateWhatsAppLink(mainContact.num, school.namaSekolah, school.status)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`Hubungi WA (${mainContact.label})`}
+                                className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg border border-emerald-100 transition-all shadow-2xs"
+                              >
+                                <MessageSquare className="h-3.5 w-3.5" />
+                              </a>
+                            )}
+                            {mainContact && (
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(mainContact.label);
+                                  alert(`Nomor disalin: ${mainContact.label}`);
+                                }}
+                                title="Salin kontak"
+                                className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-600 rounded-lg border border-sky-100 transition-all shadow-2xs cursor-pointer"
+                              >
+                                <Phone className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => onSelectSchool(school)}
+                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg border border-indigo-100 transition-all cursor-pointer"
+                            >
+                              Detail
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* No results placeholder */}

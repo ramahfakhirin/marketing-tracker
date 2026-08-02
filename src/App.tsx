@@ -1,12 +1,17 @@
 import { useState, useEffect, useMemo } from 'react';
-import { SchoolRecord, MarketingStatus, TeamMember, UserRole } from './types';
+import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember, UserRole, AcademicYear } from './types';
+import { getInitialSchools } from './data/schoolsSeed';
+import { getInitialTeamMembers } from './data/teamSeed';
 import { SURVEYED_DATABASE } from './data/surveyedSchools';
 import Dashboard from './components/Dashboard';
 import SchoolList from './components/SchoolList';
 import SchoolDetailModal from './components/SchoolDetailModal';
 import CSVImportExport from './components/CSVImportExport';
 import TeamManagement from './components/TeamManagement';
+import AcademicYearManagement from './components/AcademicYearManagement';
+import MasterDataManagement from './components/MasterDataManagement';
 import Login from './components/Login';
+import { isSameCity } from './data/indonesiaData';
 import { 
   BarChart3, 
   School, 
@@ -22,43 +27,66 @@ import {
   Upload,
   Plus,
   LogOut,
-  User
+  User,
+  Calendar,
+  Database
 } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'ae_marketing_tracker_schools_v2';
 const TEAM_STORAGE_KEY = 'ae_marketing_tracker_team_v1';
-const TOKEN_STORAGE_KEY = 'ae_marketing_tracker_token_v2';
+const AY_STORAGE_KEY = 'ae_marketing_academic_years_v1';
+
+const DEFAULT_ACADEMIC_YEARS: AcademicYear[] = [
+  {
+    id: 'ay-2027-2028',
+    yearName: '2027/2028',
+    title: 'Tahun Ajaran 2027/2028',
+    startDate: '1 Jul 2027',
+    endDate: '30 Jun 2028',
+    status: 'MENDATANG',
+    note: 'Periode Persiapan Mendatang'
+  },
+  {
+    id: 'ay-2026-2027',
+    yearName: '2026/2027',
+    title: 'Tahun Ajaran 2026/2027',
+    startDate: '1 Jul 2026',
+    endDate: '30 Jun 2027',
+    status: 'AKTIF',
+    note: 'Periode Berjalan Utama (Aktif)'
+  },
+  {
+    id: 'ay-2025-2026',
+    yearName: '2025/2026',
+    title: 'Tahun Ajaran 2025/2026',
+    startDate: '1 Jul 2025',
+    endDate: '30 Jun 2026',
+    status: 'ARSIP',
+    note: 'Periode Arsip Tahun Lalu'
+  },
+  {
+    id: 'ay-2024-2025',
+    yearName: '2024/2025',
+    title: 'Tahun Ajaran 2024/2025',
+    startDate: '1 Jul 2024',
+    endDate: '30 Jun 2025',
+    status: 'ARSIP',
+    note: 'Periode Arsip Lampau'
+  }
+];
 
 export default function App() {
   const [schools, setSchools] = useState<SchoolRecord[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>(DEFAULT_ACADEMIC_YEARS);
+  const [selectedAcademicYearFilter, setSelectedAcademicYearFilter] = useState<string>(''); // empty means "Semua Periode"
   const [selectedSchool, setSelectedSchool] = useState<SchoolRecord | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'prospects' | 'database' | 'sync' | 'team'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'prospects' | 'database' | 'master' | 'team'>('dashboard');
 
   // Auth & Session States
   const [currentUser, setCurrentUser] = useState<TeamMember | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(null);
   const [authHydrated, setAuthHydrated] = useState(false);
-
-  // Fetch wrapper that attaches the session token and auto-logs-out on 401
-  const authFetch = async (url: string, options: RequestInit = {}, token?: string | null) => {
-    const activeToken = token !== undefined ? token : authToken;
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
-      },
-    });
-    if (res.status === 401) {
-      setCurrentUser(null);
-      setAuthToken(null);
-      localStorage.removeItem('ae_marketing_tracker_current_user_v1');
-      localStorage.removeItem(TOKEN_STORAGE_KEY);
-    }
-    return res;
-  };
 
   // Custom surveyed database state for expansion
   const [customDatabase, setCustomDatabase] = useState<Record<string, Record<string, any[]>>>({});
@@ -69,9 +97,9 @@ export default function App() {
     switch (currentUser.role) {
       case 'SUPERADMIN':
       case 'MANAGER':
-        return ['dashboard', 'prospects', 'database', 'sync', 'team'];
+        return ['dashboard', 'prospects', 'database', 'master', 'team'];
       case 'AE':
-        return ['dashboard', 'prospects', 'database', 'sync'];
+        return ['dashboard', 'prospects', 'database', 'master'];
       case 'MARKETING_LAPANGAN':
         return ['prospects', 'database'];
       default:
@@ -115,75 +143,232 @@ export default function App() {
         }
         
         // Merge unique schools (prevent duplicates by name)
-        const existingNames = new Set(merged[uppercaseProv][uppercaseCity].map(s => s.name.toUpperCase().trim()));
+        const existingNames = new Set(merged[uppercaseProv][uppercaseCity].map(s => s.name ? s.name.toUpperCase().trim() : ''));
         
         customDatabase[prov][city].forEach(sch => {
-          const schNameUpper = sch.name.toUpperCase().trim();
-          if (!existingNames.has(schNameUpper)) {
-            merged[uppercaseProv][uppercaseCity].push(sch);
-            existingNames.add(schNameUpper);
+          if (sch && sch.name) {
+            const schNameUpper = sch.name.toUpperCase().trim();
+            if (!existingNames.has(schNameUpper)) {
+              merged[uppercaseProv][uppercaseCity].push(sch);
+              existingNames.add(schNameUpper);
+            }
           }
         });
       });
     });
 
+    // 3. Merge active prospect schools so new cities/provinces are always visible
+    schools.forEach(s => {
+      if (s.provinsi && s.kota) {
+        const uppercaseProv = s.provinsi.toUpperCase().trim();
+        const uppercaseCity = s.kota.toUpperCase().trim();
+        if (!merged[uppercaseProv]) {
+          merged[uppercaseProv] = {};
+        }
+        if (!merged[uppercaseProv][uppercaseCity]) {
+          merged[uppercaseProv][uppercaseCity] = [];
+        }
+        if (s.namaSekolah) {
+          const schNameUpper = s.namaSekolah.toUpperCase().trim();
+          const existingNames = new Set(merged[uppercaseProv][uppercaseCity].map(item => item.name ? item.name.toUpperCase().trim() : ''));
+          if (!existingNames.has(schNameUpper)) {
+            merged[uppercaseProv][uppercaseCity].push({
+              name: s.namaSekolah,
+              instagram: s.instagramHandle,
+              tiktok: s.tiktokHandle
+            });
+          }
+        }
+      }
+    });
+
     return merged;
-  }, [customDatabase]);
+  }, [customDatabase, schools]);
 
   // Shared filter states (dashboard can set these to filter the school list automatically)
-  const [selectedStatusFilter, setSelectedStatusFilter] = useState<MarketingStatus | ''>('');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<MarketingStatus | 'BELUM AKTIF' | ''>('');
   const [selectedPicFilter, setSelectedPicFilter] = useState<string | ''>('');
 
   // Shared active region states for database tab
   const [selectedProvince, setSelectedProvince] = useState<string>('JAWA TIMUR');
   const [selectedCity, setSelectedCity] = useState<string>('SURABAYA');
 
-  // Hydrate session first; only load server data once a valid session token exists
-  useEffect(() => {
-    const hydrate = async () => {
-      const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
-      const savedUser = localStorage.getItem('ae_marketing_tracker_current_user_v1');
+  const handleResetAllData = async () => {
+    try {
+      await fetch('/api/schools/reset', { method: 'POST' });
+      await fetch('/api/custom-db/reset', { method: 'POST' });
+    } catch (e) {
+      console.warn('Failed resetting on server, clearing locally', e);
+    }
+    setSchools([]);
+    setCustomDatabase({});
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+    localStorage.removeItem('ae_custom_surveyed_database_v2');
+  };
 
-      if (savedToken && savedUser) {
+  // Load initial data from Express backend with local storage fallbacks
+  useEffect(() => {
+    const loadData = async () => {
+      // 1. Load custom database
+      try {
+        const res = await fetch('/api/custom-db');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+            setCustomDatabase(data);
+            localStorage.setItem('ae_custom_surveyed_database_v2', JSON.stringify(data));
+          } else {
+            const savedCustomDb = localStorage.getItem('ae_custom_surveyed_database_v2');
+            if (savedCustomDb) {
+              try {
+                const parsed = JSON.parse(savedCustomDb);
+                if (parsed && Object.keys(parsed).length > 0) {
+                  setCustomDatabase(parsed);
+                  fetch('/api/custom-db-bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(parsed)
+                  }).catch(e => console.warn('Failed to re-sync custom db to server', e));
+                }
+              } catch (err) {
+                console.error('Failed to parse custom database fallback', err);
+              }
+            }
+          }
+        } else {
+          throw new Error('Not ok');
+        }
+      } catch (e) {
+        console.warn('Failed to load custom database from server, using local fallback', e);
+        const savedCustomDb = localStorage.getItem('ae_custom_surveyed_database_v2');
+        if (savedCustomDb) {
+          try {
+            setCustomDatabase(JSON.parse(savedCustomDb));
+          } catch (err) {
+            console.error('Failed to parse custom database', err);
+          }
+        }
+      }
+
+      // 2. Load schools
+      try {
+        const res = await fetch('/api/schools');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setSchools(data);
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+          } else {
+            const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (saved) {
+              try {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  setSchools(parsed);
+                  fetch('/api/schools/bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(parsed)
+                  }).catch(e => console.warn('Failed to re-sync schools to server', e));
+                } else {
+                  setSchools([]);
+                }
+              } catch (err) {
+                console.error('Failed to parse saved schools', err);
+                setSchools([]);
+              }
+            } else {
+              setSchools([]);
+            }
+          }
+        } else {
+          throw new Error('Not ok');
+        }
+      } catch (e) {
+        console.warn('Failed to load schools from server, using local fallback', e);
+        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (saved) {
+          try {
+            setSchools(JSON.parse(saved));
+          } catch (err) {
+            console.error('Failed to parse saved schools', err);
+            setSchools([]);
+          }
+        } else {
+          setSchools([]);
+        }
+      }
+
+      // 3. Load team members
+      try {
+        const res = await fetch('/api/team');
+        if (res.ok) {
+          const data = await res.json();
+          setTeamMembers(data);
+        } else {
+          throw new Error('Not ok');
+        }
+      } catch (e) {
+        console.warn('Failed to load team from server, using local fallback', e);
+        const savedTeam = localStorage.getItem(TEAM_STORAGE_KEY);
+        if (savedTeam) {
+          try {
+            setTeamMembers(JSON.parse(savedTeam));
+          } catch (err) {
+            console.error('Failed to parse saved team, falling back to seed', err);
+            const teamSeed = getInitialTeamMembers();
+            setTeamMembers(teamSeed);
+            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
+          }
+        } else {
+          const teamSeed = getInitialTeamMembers();
+          setTeamMembers(teamSeed);
+          localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
+        }
+      }
+
+      // 4. Load academic years
+      try {
+        const res = await fetch('/api/academic-years');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setAcademicYears(data);
+            localStorage.setItem(AY_STORAGE_KEY, JSON.stringify(data));
+          } else {
+            setAcademicYears(DEFAULT_ACADEMIC_YEARS);
+          }
+        } else {
+          throw new Error('Not ok');
+        }
+      } catch (e) {
+        console.warn('Failed to load academic years from server, using local fallback', e);
+        const savedAy = localStorage.getItem(AY_STORAGE_KEY);
+        if (savedAy) {
+          try {
+            setAcademicYears(JSON.parse(savedAy));
+          } catch (err) {
+            setAcademicYears(DEFAULT_ACADEMIC_YEARS);
+          }
+        } else {
+          setAcademicYears(DEFAULT_ACADEMIC_YEARS);
+        }
+      }
+
+      // 5. Load session
+      const savedUser = localStorage.getItem('ae_marketing_tracker_current_user_v1');
+      if (savedUser) {
         try {
-          setAuthToken(savedToken);
           setCurrentUser(JSON.parse(savedUser));
-          await loadServerData(savedToken);
         } catch (e) {
-          console.error('Failed to restore session', e);
-          localStorage.removeItem(TOKEN_STORAGE_KEY);
-          localStorage.removeItem('ae_marketing_tracker_current_user_v1');
+          console.error('Failed to parse current user session', e);
         }
       }
       setAuthHydrated(true);
     };
 
-    hydrate();
+    loadData();
   }, []);
-
-  // Load schools, team, and custom database from the server (requires an authenticated session)
-  const loadServerData = async (token: string) => {
-    try {
-      const res = await authFetch('/api/custom-db', {}, token);
-      if (res.ok) setCustomDatabase(await res.json());
-    } catch (e) {
-      console.warn('Failed to load custom database from server', e);
-    }
-
-    try {
-      const res = await authFetch('/api/schools', {}, token);
-      if (res.ok) setSchools(await res.json());
-    } catch (e) {
-      console.warn('Failed to load schools from server', e);
-    }
-
-    try {
-      const res = await authFetch('/api/team', {}, token);
-      if (res.ok) setTeamMembers(await res.json());
-    } catch (e) {
-      console.warn('Failed to load team from server', e);
-    }
-  };
 
   // Enforce available tabs based on user role
   useEffect(() => {
@@ -192,9 +377,9 @@ export default function App() {
     }
   }, [currentUser, availableTabs, activeTab]);
 
-  const handleLogin = async (credentials: { username: string; password?: string }) => {
-    const cleanUsername = credentials.username.toLowerCase().trim();
-    const cleanPassword = credentials.password || '';
+  const handleLogin = async (user: TeamMember | { username: string; password?: string }) => {
+    const cleanUsername = user.username.toLowerCase().trim();
+    const cleanPassword = user.password || '';
 
     try {
       const res = await fetch('/api/login', {
@@ -202,48 +387,238 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: cleanUsername, password: cleanPassword })
       });
-      const data = await res.json();
       if (res.ok) {
-        setCurrentUser(data.user);
-        setAuthToken(data.token);
-        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(data.user));
-        localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
-        await loadServerData(data.token);
-
-        if (data.user.role === 'MARKETING_LAPANGAN') {
+        const authenticatedUser = await res.json();
+        setCurrentUser(authenticatedUser);
+        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(authenticatedUser));
+        
+        if (authenticatedUser.role === 'MARKETING_LAPANGAN') {
           setActiveTab('prospects');
         } else {
           setActiveTab('dashboard');
         }
+        return;
       } else {
-        alert(data.error || "Username atau password salah!");
+        const errorData = await res.json();
+        // If server responded with error status (e.g. 401), check client fallback if available
+        const foundLocal = teamMembers.find(u => u.username.toLowerCase() === cleanUsername);
+        if (foundLocal && foundLocal.password && foundLocal.password === cleanPassword) {
+          setCurrentUser(foundLocal);
+          localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(foundLocal));
+          if (foundLocal.role === 'MARKETING_LAPANGAN') setActiveTab('prospects');
+          else setActiveTab('dashboard');
+          return;
+        }
+        alert(errorData.error || "Username atau password salah!");
+        return;
       }
     } catch (e) {
-      console.error('Login request failed', e);
-      alert("Tidak dapat terhubung ke server. Coba lagi.");
+      console.warn('Login connection failed, using client fallback', e);
     }
+
+    // Client fallback if server is unreachable
+    const foundLocal = teamMembers.find(u => u.username.toLowerCase() === cleanUsername);
+    if (foundLocal) {
+      if (!foundLocal.password || foundLocal.password === cleanPassword) {
+        setCurrentUser(foundLocal);
+        localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(foundLocal));
+        if (foundLocal.role === 'MARKETING_LAPANGAN') setActiveTab('prospects');
+        else setActiveTab('dashboard');
+        return;
+      }
+    } else if ('role' in user) {
+      setCurrentUser(user);
+      localStorage.setItem('ae_marketing_tracker_current_user_v1', JSON.stringify(user));
+      if (user.role === 'MARKETING_LAPANGAN') setActiveTab('prospects');
+      else setActiveTab('dashboard');
+      return;
+    }
+
+    alert("Username atau password salah!");
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    setAuthToken(null);
     localStorage.removeItem('ae_marketing_tracker_current_user_v1');
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
   };
 
+  // Save to local storage helper
   const saveSchools = (updatedSchools: SchoolRecord[]) => {
     setSchools(updatedSchools);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedSchools));
+  };
+
+  // Save bulk schools (e.g. CSV import) and sync to server & customDatabase
+  const handleImportBulkSchools = async (importedSchools: SchoolRecord[]): Promise<{ success: boolean; count: number }> => {
+    const usedNos = new Set<number>();
+    const normalized = importedSchools.map((sch, idx) => {
+      const parsedNo = typeof sch.no === 'number' ? sch.no : parseInt(String(sch.no), 10);
+      let itemNo = (!isNaN(parsedNo) && parsedNo > 0) ? parsedNo : (idx + 1);
+      while (usedNos.has(itemNo)) {
+        itemNo++;
+      }
+      usedNos.add(itemNo);
+      return {
+        no: itemNo,
+        namaSekolah: sch.namaSekolah || '',
+        originalName: sch.originalName || '',
+        provinsi: sch.provinsi || '',
+        kota: sch.kota || '',
+        instagramHandle: sch.instagramHandle || '',
+        tiktokHandle: sch.tiktokHandle || '',
+        picMarketing: sch.picMarketing || '',
+        marketingLapangan: sch.marketingLapangan || '',
+        status: (sch.status || 'BARU') as MarketingStatus,
+        kontakPic1: sch.kontakPic1 || '',
+        kontakPic2: sch.kontakPic2 || '',
+        kontakPic3: sch.kontakPic3 || '',
+        kontakPic4: sch.kontakPic4 || '',
+        tanggalKontakAwal: sch.tanggalKontakAwal || '',
+        jenisLayanan: sch.jenisLayanan || '',
+        catatanAwal: sch.catatanAwal || '',
+        tanggalFollowUpTerakhir: sch.tanggalFollowUpTerakhir || '',
+        kemungkinanClosing: (sch.kemungkinanClosing || '') as ClosingProbability,
+        updates: sch.updates || []
+      };
+    });
+
+    // Save to local storage & React state
+    saveSchools(normalized);
+
+    // Sync to server bulk API
+    try {
+      const res = await fetch('/api/schools/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(normalized)
+      });
+      
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server HTTP Error ${res.status}`);
+      }
+    } catch (e: any) {
+      console.error('Failed to sync bulk schools to server', e);
+      throw new Error('Gagal menyimpan data ke database server: ' + (e.message || 'Koneksi gagal'));
+    }
+
+    // Auto-sync customDatabase for any imported schools with province & city
+    const newCustomDb = { ...customDatabase };
+    let hasCustomDbChanges = false;
+
+    importedSchools.forEach(sch => {
+      if (sch.provinsi && sch.kota && sch.namaSekolah) {
+        const provUpper = sch.provinsi.toUpperCase().trim();
+        const cityUpper = sch.kota.toUpperCase().trim();
+        if (!newCustomDb[provUpper]) newCustomDb[provUpper] = {};
+        if (!newCustomDb[provUpper][cityUpper]) newCustomDb[provUpper][cityUpper] = [];
+
+        const existingNames = new Set(
+          newCustomDb[provUpper][cityUpper].map(s => s.name ? s.name.toUpperCase().trim() : '')
+        );
+        const schNameUpper = sch.namaSekolah.toUpperCase().trim();
+        if (!existingNames.has(schNameUpper)) {
+          newCustomDb[provUpper][cityUpper].push({
+            name: sch.namaSekolah,
+            instagram: sch.instagramHandle || '',
+            tiktok: sch.tiktokHandle || ''
+          });
+          hasCustomDbChanges = true;
+        }
+      }
+    });
+
+    if (hasCustomDbChanges) {
+      await saveCustomDatabase(newCustomDb);
+    }
+
+    return { success: true, count: normalized.length };
+  };
+
+  const activeAcademicYear = useMemo(() => {
+    const active = academicYears.find(a => a.status === 'AKTIF');
+    return active ? active.yearName : '2026/2027';
+  }, [academicYears]);
+
+  // Filtered schools according to global Academic Year filter
+  const displaySchools = useMemo(() => {
+    if (!selectedAcademicYearFilter || selectedAcademicYearFilter === 'SEMUA') {
+      return [];
+    }
+    return schools
+      .map(s => ({ ...s, periode: s.periode || '2026/2027' }))
+      .filter(s => s.periode === selectedAcademicYearFilter);
+  }, [schools, selectedAcademicYearFilter]);
+
+  const handleAddAcademicYear = async (newAy: Omit<AcademicYear, 'id'>) => {
+    const ayObj: AcademicYear = {
+      ...newAy,
+      id: `ay-${Date.now()}`
+    };
+    
+    let nextAys = [...academicYears];
+    if (ayObj.status === 'AKTIF') {
+      nextAys = nextAys.map(a => ({ ...a, status: 'ARSIP' as const }));
+    }
+    nextAys = [ayObj, ...nextAys];
+    setAcademicYears(nextAys);
+    localStorage.setItem(AY_STORAGE_KEY, JSON.stringify(nextAys));
+
+    try {
+      await fetch('/api/academic-years', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ayObj)
+      });
+    } catch (e) {
+      console.warn('Failed sync academic year to server', e);
+    }
+  };
+
+  const handleUpdateAcademicYear = async (updatedAy: AcademicYear) => {
+    let nextAys = academicYears.map(a => a.id === updatedAy.id ? updatedAy : a);
+    if (updatedAy.status === 'AKTIF') {
+      nextAys = nextAys.map(a => a.id === updatedAy.id ? updatedAy : { ...a, status: 'ARSIP' as const });
+    }
+    setAcademicYears(nextAys);
+    localStorage.setItem(AY_STORAGE_KEY, JSON.stringify(nextAys));
+
+    try {
+      await fetch('/api/academic-years', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedAy)
+      });
+    } catch (e) {
+      console.warn('Failed sync updated academic year to server', e);
+    }
+  };
+
+  const handleDeleteAcademicYear = async (id: string) => {
+    const nextAys = academicYears.filter(a => a.id !== id);
+    setAcademicYears(nextAys);
+    localStorage.setItem(AY_STORAGE_KEY, JSON.stringify(nextAys));
+
+    try {
+      await fetch(`/api/academic-years/${id}`, {
+        method: 'DELETE'
+      });
+    } catch (e) {
+      console.warn('Failed delete academic year on server', e);
+    }
   };
 
   const saveTeamMembers = (updatedTeam: TeamMember[]) => {
     setTeamMembers(updatedTeam);
+    localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(updatedTeam));
   };
 
   const saveCustomDatabase = async (newDb: Record<string, Record<string, any[]>>) => {
     setCustomDatabase(newDb);
+    localStorage.setItem('ae_custom_surveyed_database_v2', JSON.stringify(newDb));
 
     try {
-      await authFetch('/api/custom-db-bulk', {
+      await fetch('/api/custom-db-bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newDb)
@@ -253,33 +628,41 @@ export default function App() {
     }
   };
 
-  // Callback to register team member (returns an error message on failure, undefined on success)
-  const handleAddTeamMember = async (name: string, role: UserRole, username: string, password?: string): Promise<string | undefined> => {
+  // Callback to register team member
+  const handleAddTeamMember = async (name: string, role: UserRole, username: string, password?: string) => {
     const cleanUsername = username.toLowerCase().trim();
-    const newMember = {
+    const cleanPassword = password?.trim() || 'password123';
+
+    const newMember: TeamMember = {
       id: `${role.toLowerCase()}-${Date.now()}`,
       name,
       role,
       username: cleanUsername,
-      password: password?.trim() || undefined,
+      password: cleanPassword,
     };
 
     try {
-      const res = await authFetch('/api/team', {
+      const res = await fetch('/api/team', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newMember)
       });
-      const data = await res.json();
       if (res.ok) {
-        setTeamMembers(prev => [...prev.filter(t => t.id !== data.id && t.username !== cleanUsername), data]);
-        return undefined;
+        const saved = await res.json();
+        const memberWithPass = { ...saved, password: cleanPassword };
+        setTeamMembers(prev => {
+          const next = [...prev.filter(t => t.id !== saved.id && t.username !== cleanUsername), memberWithPass];
+          localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(next));
+          return next;
+        });
+        return;
       }
-      return data.error || 'Gagal menambahkan anggota tim';
     } catch (e) {
       console.error('Failed saving team member to server', e);
-      return 'Tidak dapat terhubung ke server';
     }
+
+    const nextTeam = [...teamMembers.filter(t => t.username !== cleanUsername), newMember];
+    saveTeamMembers(nextTeam);
   };
 
   // Callback to delete team member and clear their penugasan on schools
@@ -288,7 +671,7 @@ export default function App() {
     if (!memberToDelete) return;
 
     try {
-      await authFetch(`/api/team/${id}`, { method: 'DELETE' });
+      await fetch(`/api/team/${id}`, { method: 'DELETE' });
     } catch (e) {
       console.error('Failed to delete team member on server', e);
     }
@@ -328,86 +711,106 @@ export default function App() {
   // Callback to reset marketing team database, keeping only Super Admin
   const handleResetTeam = async () => {
     try {
-      const res = await authFetch('/api/team/reset', { method: 'POST' });
+      const res = await fetch('/api/team/reset', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setTeamMembers(data.team);
+        localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data.team));
         alert("Database tim marketing berhasil di-reset. Tersisa Super Admin.");
-      } else {
-        alert("Gagal me-reset database tim di server.");
+        return;
       }
     } catch (e) {
       console.error('Failed resetting team on server', e);
-      alert("Tidak dapat terhubung ke server.");
     }
+
+    const resetSeed = getInitialTeamMembers();
+    setTeamMembers(resetSeed);
+    localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(resetSeed));
+    alert("Database tim marketing di-reset secara lokal. Tersisa Super Admin.");
   };
 
   // Callback to update or add a school
   const handleSaveSchool = async (updatedSchool: SchoolRecord) => {
-    const isNew = !updatedSchool.no || !schools.some(s => s.no === updatedSchool.no);
-    if (isNew && (!updatedSchool.no || updatedSchool.no === 0)) {
+    const isNew = !updatedSchool.no || updatedSchool.no <= 0 || !schools.some(s => s.no === updatedSchool.no);
+    if (isNew) {
       const maxNo = schools.reduce((max, s) => s.no > max ? s.no : max, 0);
       updatedSchool.no = maxNo + 1;
     }
 
+    // 1. Instantly save to local state and localStorage for instant UI response
+    const exists = schools.some(s => s.no === updatedSchool.no);
+    const initialNext = exists
+      ? schools.map(s => s.no === updatedSchool.no ? updatedSchool : s)
+      : [updatedSchool, ...schools];
+    saveSchools(initialNext);
+
+    let savedResult: SchoolRecord = updatedSchool;
     try {
-      const res = await authFetch('/api/schools', {
+      const res = await fetch('/api/schools', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedSchool)
       });
       if (res.ok) {
-        const saved = await res.json();
-        if (isNew) {
-          setSchools(prev => [saved, ...prev.filter(s => s.no !== updatedSchool.no)]);
-        } else {
-          setSchools(prev => prev.map(s => s.no === saved.no ? saved : s));
-        }
-      } else {
-        alert('Gagal menyimpan sekolah ke server.');
+        savedResult = await res.json();
+        setSchools(prev => {
+          const prevExists = prev.some(s => s.no === savedResult.no || s.no === updatedSchool.no);
+          const updatedList = prevExists
+            ? prev.map(s => (s.no === savedResult.no || s.no === updatedSchool.no) ? savedResult : s)
+            : [savedResult, ...prev];
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
+          return updatedList;
+        });
       }
     } catch (e) {
-      console.error('Failed saving school to server', e);
-      alert('Tidak dapat terhubung ke server.');
+      console.warn('Failed saving school to server, using client fallback', e);
+    }
+
+    // Auto-sync custom database if province & city are provided
+    if (savedResult.provinsi && savedResult.kota) {
+      const provUpper = savedResult.provinsi.toUpperCase().trim();
+      const cityUpper = savedResult.kota.toUpperCase().trim();
+      const newCustomDb = { ...customDatabase };
+      if (!newCustomDb[provUpper]) newCustomDb[provUpper] = {};
+      if (!newCustomDb[provUpper][cityUpper]) newCustomDb[provUpper][cityUpper] = [];
+
+      const existingNames = new Set(newCustomDb[provUpper][cityUpper].map(s => s.name ? s.name.toUpperCase().trim() : ''));
+      if (savedResult.namaSekolah && !existingNames.has(savedResult.namaSekolah.toUpperCase().trim())) {
+        newCustomDb[provUpper][cityUpper].push({
+          name: savedResult.namaSekolah,
+          instagram: savedResult.instagramHandle || '',
+          tiktok: savedResult.tiktokHandle || ''
+        });
+        saveCustomDatabase(newCustomDb);
+      } else if (!newCustomDb[provUpper][cityUpper]) {
+        saveCustomDatabase(newCustomDb);
+      }
     }
   };
 
   // Callback to delete a school
-  const handleDeleteSchool = async (schoolNo: number) => {
+  const handleDeleteSchool = async (schoolNo: number, schoolName?: string) => {
     try {
-      const res = await authFetch(`/api/schools/${schoolNo}`, { method: 'DELETE' });
-      if (res.ok) {
-        setSchools(prev => prev.filter(s => Number(s.no) !== Number(schoolNo)));
-      } else {
-        alert('Gagal menghapus sekolah di server.');
+      if (schoolNo > 0) {
+        await fetch(`/api/schools/${schoolNo}`, { method: 'DELETE' });
       }
     } catch (e) {
-      console.error('Failed to delete school on server', e);
-      alert('Tidak dapat terhubung ke server.');
+      console.warn('Failed to delete school on server, using client fallback', e);
     }
+
+    const nextSchools = schools.filter(s => {
+      if (schoolNo > 0 && Number(s.no) === Number(schoolNo)) {
+        return false;
+      }
+      if (schoolName && s.namaSekolah?.toLowerCase().trim() === schoolName.toLowerCase().trim()) {
+        return false;
+      }
+      return true;
+    });
+
+    saveSchools(nextSchools);
     setIsDetailOpen(false);
     setSelectedSchool(null);
-  };
-
-  // Callback to bulk-replace all schools (CSV import / full database reset) - always persists to server
-  const handleBulkReplaceSchools = async (newSchools: SchoolRecord[]) => {
-    try {
-      const res = await authFetch('/api/schools/bulk-replace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newSchools)
-      });
-      if (res.ok) {
-        setSchools(newSchools);
-        return true;
-      }
-      alert('Gagal menyimpan data ke server.');
-      return false;
-    } catch (e) {
-      console.error('Failed to bulk-replace schools on server', e);
-      alert('Tidak dapat terhubung ke server.');
-      return false;
-    }
   };
 
   // Callback from dashboard to filter status
@@ -433,11 +836,32 @@ export default function App() {
     setIsDetailOpen(true);
   };
 
-  // Calculate quick top counters
-  const totalSchoolsCount = schools.length;
-  const prospectSchoolsCount = schools.filter(s => ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(s.status)).length;
-  const contactedSchoolsCount = schools.filter(s => s.status !== 'BARU').length;
-  const closedSuccessCount = schools.filter(s => s.status === 'DEAL' || (s.status as string) === 'CLOSED').length;
+  // Filtered schools according to selected region (Province & City) in addition to Academic Year
+  const displaySchoolsForRegion = useMemo(() => {
+    return displaySchools.filter(s => {
+      if (selectedProvince) {
+        const provUpper = s.provinsi?.toUpperCase().trim() || '';
+        if (provUpper !== selectedProvince.toUpperCase().trim()) return false;
+      }
+      if (selectedCity) {
+        const cityUpper = s.kota?.toUpperCase().trim() || '';
+        if (!isSameCity(cityUpper, selectedCity, selectedProvince)) return false;
+      }
+      return true;
+    });
+  }, [displaySchools, selectedProvince, selectedCity]);
+
+  // Calculate quick top counters based on current active period and active region filters
+  const totalSchoolsCount = displaySchoolsForRegion.length;
+  const prospectSchoolsCount = useMemo(() => {
+    return displaySchoolsForRegion.filter(s => ['PROSPEK', 'MEETING / VISIT', 'DEAL', 'CLOSING', 'CLOSED'].includes(s.status)).length;
+  }, [displaySchoolsForRegion]);
+  const contactedSchoolsCount = useMemo(() => {
+    return displaySchoolsForRegion.filter(s => s.status !== 'BARU').length;
+  }, [displaySchoolsForRegion]);
+  const closedSuccessCount = useMemo(() => {
+    return displaySchoolsForRegion.filter(s => s.status === 'DEAL' || (s.status as string) === 'CLOSED').length;
+  }, [displaySchoolsForRegion]);
 
   if (!authHydrated) {
     return (
@@ -453,41 +877,41 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <Login onLogin={handleLogin} />;
+    return <Login teamMembers={teamMembers} onLogin={handleLogin} />;
   }
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans" id="app-root">
+    <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans max-w-full overflow-x-hidden" id="app-root">
       
       {/* Dynamic Navigation Header */}
-      <header className="bg-white/95 backdrop-blur-md sticky top-0 z-40 border-b border-slate-200/80 shadow-xs" id="main-header">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 md:py-3 flex flex-col md:flex-row items-center justify-between gap-2.5 md:gap-3">
+      <header className="bg-white/95 backdrop-blur-md sticky top-0 z-40 border-b border-slate-200/80 shadow-xs max-w-full overflow-hidden" id="main-header">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 md:py-3 flex flex-col lg:flex-row items-center justify-between gap-2.5 lg:gap-4">
           
-          {/* Logo Title & Profile combined on mobile */}
-          <div className="flex items-center justify-between w-full md:w-auto" id="header-logo-container">
-            <div className="flex items-center space-x-2.5 sm:space-x-3">
-              <div className="w-8.5 h-8.5 md:w-9 md:h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-sm shrink-0">
+          {/* Logo Title & Profile combined on mobile & tablet */}
+          <div className="flex items-center justify-between w-full lg:w-auto shrink-0 gap-2" id="header-logo-container">
+            <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+              <div className="w-8 h-8 md:w-9 md:h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-sm shrink-0">
                 <Briefcase className="h-4 w-4 md:h-4.5 md:w-4.5" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <h1 className="text-sm md:text-base font-bold tracking-tight text-slate-900">
+                  <h1 className="text-xs sm:text-sm md:text-base font-bold tracking-tight text-slate-900 truncate">
                     Marketing & CRM Tracker Nanoidn
                   </h1>
-                  <span className="text-[7px] md:text-[8px] font-extrabold tracking-widest bg-indigo-50 text-indigo-600 border border-indigo-100 px-1.5 py-0.5 rounded-md">PWA</span>
+                  <span className="text-[7px] md:text-[8px] font-extrabold tracking-widest bg-indigo-50 text-indigo-600 border border-indigo-100 px-1 py-0.2 sm:px-1.5 sm:py-0.5 rounded-md shrink-0">PWA</span>
                 </div>
-                <p className="text-[10px] text-slate-500 font-medium hidden md:block uppercase">Sistem Pemantauan Progress & Database Marketing Nanoidn</p>
+                <p className="text-[10px] text-slate-500 font-medium hidden sm:block uppercase truncate">Sistem Pemantauan Progress & Database Marketing Nanoidn</p>
               </div>
             </div>
 
-            {/* Profile Avatar & Logout Button for Mobile only */}
-            <div className="flex md:hidden items-center space-x-2 bg-indigo-50/60 border border-indigo-100/60 px-2 py-0.5 rounded-lg shadow-3xs" id="header-user-profile-mobile">
+            {/* Profile Avatar & Logout Button for Mobile/Tablet (< lg) */}
+            <div className="flex lg:hidden items-center space-x-1.5 bg-indigo-50/60 border border-indigo-100/60 px-2 py-0.5 rounded-lg shadow-3xs shrink-0" id="header-user-profile-mobile">
               <div className="flex items-center space-x-1 shrink-0">
                 <div className="h-5 w-5 rounded bg-indigo-600 text-white flex items-center justify-center font-black text-[8px] uppercase shadow-2xs shrink-0">
                   {currentUser?.name.substring(0, 2)}
                 </div>
-                <div className="text-left">
-                  <p className="text-[8px] font-extrabold text-slate-800 leading-none">{currentUser?.name.split(' ')[0]}</p>
+                <div className="text-left max-w-[60px] sm:max-w-none truncate">
+                  <p className="text-[8px] sm:text-[9px] font-extrabold text-slate-800 leading-none truncate">{currentUser?.name.split(' ')[0]}</p>
                 </div>
               </div>
               <div className="h-3.5 w-px bg-indigo-100"></div>
@@ -503,32 +927,59 @@ export default function App() {
           </div>
 
           {/* Quick Stats Panel & Status badge in Header */}
-          <div className="flex items-center justify-between w-full md:w-auto gap-2 md:gap-3" id="header-actions-area">
-            <div className="px-2 py-0.5 md:px-2.5 md:py-1 bg-emerald-50 text-emerald-700 rounded-full text-[9px] md:text-[10px] font-semibold flex items-center gap-1 border border-emerald-100 shrink-0">
+          <div className="flex items-center justify-between sm:justify-end w-full lg:w-auto gap-1.5 sm:gap-2 md:gap-3 shrink-0" id="header-actions-area">
+            
+            {/* Global Academic Year Filter Dropdown */}
+            <div 
+              className={`flex items-center space-x-1 sm:space-x-1.5 px-2 py-1 sm:px-3 sm:py-1.5 rounded-xl border transition-all shrink-0 ${
+                !selectedAcademicYearFilter 
+                  ? 'bg-amber-100 text-amber-950 border-amber-300 ring-2 ring-amber-400/50' 
+                  : 'bg-indigo-50/90 hover:bg-indigo-100 text-indigo-700 border-indigo-200/80 shadow-3xs'
+              }`} 
+              id="header-global-periode-filter"
+            >
+              <Calendar className={`h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0 ${!selectedAcademicYearFilter ? 'text-amber-700' : 'text-indigo-600'}`} />
+              <span className={`text-[9px] sm:text-[10px] font-extrabold uppercase hidden sm:inline ${!selectedAcademicYearFilter ? 'text-amber-800' : 'text-indigo-500'}`}>Periode:</span>
+              <select
+                id="select-global-academic-year"
+                value={selectedAcademicYearFilter}
+                onChange={(e) => setSelectedAcademicYearFilter(e.target.value)}
+                className={`bg-transparent text-[11px] sm:text-xs font-black border-none outline-hidden focus:ring-0 cursor-pointer pr-0.5 max-w-[120px] sm:max-w-none truncate ${!selectedAcademicYearFilter ? 'text-amber-950' : 'text-indigo-950'}`}
+              >
+                <option value="">Pilih Periode</option>
+                {academicYears.map((ay) => (
+                  <option key={ay.id} value={ay.yearName}>
+                    {ay.yearName} {ay.status === 'AKTIF' ? '★ Aktif' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="px-1.5 py-0.5 sm:px-2.5 sm:py-1 bg-emerald-50 text-emerald-700 rounded-full text-[8px] sm:text-[9px] md:text-[10px] font-semibold flex items-center gap-1 border border-emerald-100 shrink-0">
               <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
               <span className="hidden xs:inline">Sync Aktif</span>
               <span className="xs:hidden">Sync</span>
             </div>
 
-            <div className="flex items-center space-x-2 md:space-x-4 bg-slate-50 px-2 py-0.5 md:px-3 md:py-1 rounded-xl border border-slate-200 text-[10px] md:text-[11px] text-slate-600" id="header-counters">
-              <div className="text-center min-w-[32px]">
-                <p className="text-[7px] md:text-[8px] uppercase font-extrabold text-slate-400 tracking-wider leading-none">Target</p>
-                <p className="font-bold text-slate-800 text-[10px] md:text-xs mt-0.5">{totalSchoolsCount}</p>
+            <div className="flex items-center space-x-1.5 sm:space-x-2 md:space-x-3 bg-slate-50 px-1.5 py-0.5 sm:px-2.5 sm:py-1 rounded-xl border border-slate-200 text-[9px] sm:text-[10px] md:text-[11px] text-slate-600 shrink-0" id="header-counters">
+              <div className="text-center min-w-[26px] sm:min-w-[32px]">
+                <p className="text-[6.5px] sm:text-[7px] md:text-[8px] uppercase font-extrabold text-slate-400 tracking-wider leading-none">Target</p>
+                <p className="font-bold text-slate-800 text-[9px] sm:text-[10px] md:text-xs mt-0.5">{totalSchoolsCount}</p>
               </div>
-              <div className="h-4 w-px bg-slate-200"></div>
-              <div className="text-center min-w-[32px]">
-                <p className="text-[7px] md:text-[8px] uppercase font-extrabold text-slate-400 tracking-wider leading-none">Dijajaki</p>
-                <p className="font-bold text-amber-600 text-[10px] md:text-xs mt-0.5">{contactedSchoolsCount}</p>
+              <div className="h-3.5 sm:h-4 w-px bg-slate-200"></div>
+              <div className="text-center min-w-[26px] sm:min-w-[32px]">
+                <p className="text-[6.5px] sm:text-[7px] md:text-[8px] uppercase font-extrabold text-slate-400 tracking-wider leading-none">Dijajaki</p>
+                <p className="font-bold text-amber-600 text-[9px] sm:text-[10px] md:text-xs mt-0.5">{contactedSchoolsCount}</p>
               </div>
-              <div className="h-4 w-px bg-slate-200"></div>
-              <div className="text-center min-w-[32px]">
-                <p className="text-[7px] md:text-[8px] uppercase font-extrabold text-slate-400 tracking-wider leading-none">Closed</p>
-                <p className="font-bold text-emerald-600 text-[10px] md:text-xs mt-0.5">{closedSuccessCount}</p>
+              <div className="h-3.5 sm:h-4 w-px bg-slate-200"></div>
+              <div className="text-center min-w-[26px] sm:min-w-[32px]">
+                <p className="text-[6.5px] sm:text-[7px] md:text-[8px] uppercase font-extrabold text-slate-400 tracking-wider leading-none">Closed</p>
+                <p className="font-bold text-emerald-600 text-[9px] sm:text-[10px] md:text-xs mt-0.5">{closedSuccessCount}</p>
               </div>
             </div>
 
-            {/* Profile Avatar & Logout Button for Desktop only */}
-            <div className="hidden md:flex items-center space-x-2 bg-indigo-50/60 border border-indigo-100/60 px-2.5 py-1 rounded-xl shadow-3xs" id="header-user-profile-desktop">
+            {/* Profile Avatar & Logout Button for Desktop only (>= lg) */}
+            <div className="hidden lg:flex items-center space-x-2 bg-indigo-50/60 border border-indigo-100/60 px-2.5 py-1 rounded-xl shadow-3xs shrink-0" id="header-user-profile-desktop">
               <div className="flex items-center space-x-1.5">
                 <div className="h-6 w-6 rounded-md bg-indigo-600 text-white flex items-center justify-center font-black text-[9px] uppercase shadow-2xs shrink-0">
                   {currentUser?.name.substring(0, 2)}
@@ -604,18 +1055,18 @@ export default function App() {
                 <span>Database Sekolah</span>
               </button>
             )}
-            {availableTabs.includes('sync') && (
+            {availableTabs.includes('master') && (
               <button
-                onClick={() => setActiveTab('sync')}
-                id="tab-btn-sync"
+                onClick={() => setActiveTab('master')}
+                id="tab-btn-master"
                 className={`px-4 py-2 text-xs font-bold flex items-center space-x-2 transition-all rounded-lg shrink-0 ${
-                  activeTab === 'sync'
+                  activeTab === 'master'
                     ? 'bg-white text-indigo-600 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-white/40'
                 }`}
               >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                <span>Sinkronisasi Sheet</span>
+                <Database className="h-3.5 w-3.5" />
+                <span>Master Data</span>
               </button>
             )}
             {availableTabs.includes('team') && (
@@ -646,11 +1097,46 @@ export default function App() {
           </button>
         </div>
 
+        {/* Notice Banner when no Academic Year / Periode is selected */}
+        {!selectedAcademicYearFilter && (
+          <div className="bg-amber-50/95 border-2 border-amber-300/90 rounded-2xl p-4 sm:p-5 text-amber-950 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6" id="select-periode-global-notice">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-amber-500 text-white rounded-xl flex items-center justify-center shrink-0 shadow-xs">
+                <Calendar className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-extrabold text-amber-950 flex items-center gap-1.5">
+                  <span>Pilih Periode (Tahun Ajaran) Terlebih Dahulu</span>
+                  <span className="text-[10px] px-2 py-0.5 bg-amber-200 text-amber-900 rounded-md font-black">Wajib</span>
+                </h4>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Data sekolah target disembunyikan sampai Anda memilih periode di menu kanan atas header untuk meminimalisir duplikasi data.
+                </p>
+              </div>
+            </div>
+            {academicYears.length > 0 && (
+              <div className="flex items-center flex-wrap gap-1.5 self-stretch sm:self-auto shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-amber-200/80">
+                <span className="text-[11px] font-bold text-amber-800 hidden md:inline">Pilih Cepat:</span>
+                {academicYears.map(ay => (
+                  <button
+                    key={ay.id}
+                    onClick={() => setSelectedAcademicYearFilter(ay.yearName)}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-extrabold transition-all shadow-2xs hover:shadow-xs active:scale-95 cursor-pointer flex items-center gap-1"
+                  >
+                    <span>{ay.yearName}</span>
+                    {ay.status === 'AKTIF' && <span className="text-[9px] bg-amber-800 text-amber-100 px-1 py-0.2 rounded font-black">Aktif</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Tab Contents */}
         <div className="transition-all duration-300" id="tab-renderer">
           {activeTab === 'dashboard' && (
             <Dashboard 
-              schools={schools} 
+              schools={displaySchools} 
               onSelectSchool={(school) => {
                 setSelectedSchool(school);
                 setIsDetailOpen(true);
@@ -663,7 +1149,8 @@ export default function App() {
           {activeTab === 'prospects' && (
             <SchoolList
               viewMode="prospects"
-              schools={schools}
+              schools={displaySchools}
+              selectedAcademicYearFilter={selectedAcademicYearFilter}
               selectedStatusFilter={selectedStatusFilter}
               selectedPicFilter={selectedPicFilter}
               setSelectedStatusFilter={setSelectedStatusFilter}
@@ -686,9 +1173,10 @@ export default function App() {
           {activeTab === 'database' && (
             <SchoolList
               viewMode="database"
-              schools={schools}
-              selectedStatusFilter=""
-              selectedPicFilter=""
+              schools={displaySchools}
+              selectedAcademicYearFilter={selectedAcademicYearFilter}
+              selectedStatusFilter={selectedStatusFilter}
+              selectedPicFilter={selectedPicFilter}
               setSelectedStatusFilter={setSelectedStatusFilter}
               setSelectedPicFilter={setSelectedPicFilter}
               onSelectSchool={(school) => {
@@ -706,13 +1194,19 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'sync' && (
-            <CSVImportExport
+          {activeTab === 'master' && (
+            <MasterDataManagement
               schools={schools}
-              onImport={handleBulkReplaceSchools}
-              onReset={async () => {
-                await handleBulkReplaceSchools([]);
-                await saveCustomDatabase({});
+              academicYears={academicYears}
+              onImport={handleImportBulkSchools}
+              onReset={handleResetAllData}
+              onViewProspects={() => setActiveTab('prospects')}
+              onAddAcademicYear={handleAddAcademicYear}
+              onUpdateAcademicYear={handleUpdateAcademicYear}
+              onDeleteAcademicYear={handleDeleteAcademicYear}
+              onSelectYearFilter={(yearName) => {
+                setSelectedAcademicYearFilter(yearName);
+                setActiveTab('prospects');
               }}
             />
           )}
@@ -752,6 +1246,8 @@ export default function App() {
         <SchoolDetailModal
           school={selectedSchool}
           teamMembers={teamMembers}
+          academicYears={academicYears.map(a => a.yearName)}
+          defaultPeriode={activeAcademicYear}
           onClose={() => {
             setIsDetailOpen(false);
             setSelectedSchool(null);
@@ -827,17 +1323,17 @@ export default function App() {
             )}
           </button>
         )}
-        {availableTabs.includes('sync') && (
+        {availableTabs.includes('master') && (
           <button
-            onClick={() => setActiveTab('sync')}
-            id="mobile-nav-sync"
+            onClick={() => setActiveTab('master')}
+            id="mobile-nav-master"
             className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-full transition-all relative ${
-              activeTab === 'sync' ? 'text-indigo-600 scale-110' : 'text-slate-400'
+              activeTab === 'master' ? 'text-indigo-600 scale-110' : 'text-slate-400'
             }`}
-            title="Sinkronisasi Sheet"
+            title="Master Data"
           >
-            <FileSpreadsheet className="h-5 w-5" />
-            {activeTab === 'sync' && (
+            <Database className="h-5 w-5" />
+            {activeTab === 'master' && (
               <span className="absolute -bottom-1 w-1 h-1 bg-indigo-600 rounded-full"></span>
             )}
           </button>

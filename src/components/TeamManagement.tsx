@@ -5,7 +5,7 @@ import { Users, UserPlus, Trash2, Shield, Search, Briefcase, UserCheck, Key, Inf
 interface TeamManagementProps {
   teamMembers: TeamMember[];
   schools: SchoolRecord[];
-  onAddMember: (name: string, role: UserRole, username: string, password?: string) => Promise<string | undefined>;
+  onAddMember: (name: string, role: UserRole, username: string, password?: string) => void;
   onDeleteMember: (id: string) => void;
   onResetTeam?: () => void;
   currentUser: TeamMember;
@@ -29,12 +29,12 @@ export default function TeamManagement({
 
   const isSuperAdmin = currentUser.role === 'SUPERADMIN';
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isSuperAdmin) return;
-
+    
     setErrorMessage('');
-
+    
     const trimmedName = nameInput.trim();
     const trimmedUsername = usernameInput.trim().toLowerCase();
     const trimmedPassword = passwordInput.trim();
@@ -72,15 +72,8 @@ export default function TeamManagement({
       return;
     }
 
-    const finalPassword = trimmedPassword || 'password123';
-    const error = await onAddMember(trimmedName, roleInput, trimmedUsername, finalPassword);
-    if (error) {
-      setErrorMessage(error);
-      return;
-    }
-
-    alert(`Anggota "${trimmedName}" berhasil didaftarkan.\nUsername: ${trimmedUsername}\nPassword: ${finalPassword}\n\nCatat password ini sekarang - tidak akan ditampilkan lagi.`);
-
+    onAddMember(trimmedName, roleInput, trimmedUsername, trimmedPassword || 'password123');
+    
     // Reset form
     setNameInput('');
     setUsernameInput('');
@@ -288,7 +281,7 @@ export default function TeamManagement({
                 {isSuperAdmin && onResetTeam && (
                   <button
                     onClick={() => {
-                      if (confirm("PERINGATAN: Apakah Anda yakin ingin mereset database tim marketing?\nSemua akun tim (AE, Marketing Lapangan, Manager) akan dihapus. Semua akun Super Admin yang ada akan tetap dipertahankan (password tidak berubah).")) {
+                      if (confirm("PERINGATAN: Apakah Anda yakin ingin mereset database tim marketing?\nSemua akun tim (AE, Marketing Lapangan, Manager) akan dihapus, dan HANYA Super Admin (superadmin / admin123) yang akan disisakan.")) {
                         onResetTeam();
                       }
                     }}
@@ -405,6 +398,8 @@ export default function TeamManagement({
                           <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-400 font-medium font-mono">
                             <Key className="h-2.5 w-2.5 shrink-0" />
                             <span className="truncate">@{member.username}</span>
+                            <span className="text-[9px] text-slate-300">|</span>
+                            <span>pass: {member.password || 'password123'}</span>
                           </div>
 
                           <div className="flex items-center space-x-1.5 mt-2">
