@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember, UserRole, AcademicYear } from './types';
+import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember, UserRole, AcademicYear, ActivityLog, ActivityActionType } from './types';
 import { getInitialSchools } from './data/schoolsSeed';
 import { getInitialTeamMembers } from './data/teamSeed';
 import { SURVEYED_DATABASE } from './data/surveyedSchools';
@@ -79,10 +79,38 @@ export default function App() {
   const [schools, setSchools] = useState<SchoolRecord[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>(DEFAULT_ACADEMIC_YEARS);
+  const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [selectedAcademicYearFilter, setSelectedAcademicYearFilter] = useState<string>(''); // empty means "Semua Periode"
   const [selectedSchool, setSelectedSchool] = useState<SchoolRecord | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'prospects' | 'database' | 'master' | 'team'>('dashboard');
+
+  const handleAddActivity = async (newAct: Omit<ActivityLog, 'id'>) => {
+    const actObj: ActivityLog = {
+      ...newAct,
+      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+    };
+    setActivities(prev => [actObj, ...prev]);
+
+    try {
+      await fetch('/api/activities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(actObj)
+      });
+    } catch (e) {
+      console.warn('Failed sync activity log to server', e);
+    }
+  };
+
+  const handleDeleteActivity = async (id: string) => {
+    setActivities(prev => prev.filter(a => a.id !== id));
+    try {
+      await fetch(`/api/activities/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.warn('Failed deleting activity log on server', e);
+    }
+  };
 
   // Auth & Session States
   const [currentUser, setCurrentUser] = useState<TeamMember | null>(null);
@@ -189,9 +217,9 @@ export default function App() {
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<MarketingStatus | 'BELUM AKTIF' | ''>('');
   const [selectedPicFilter, setSelectedPicFilter] = useState<string | ''>('');
 
-  // Shared active region states for database tab
-  const [selectedProvince, setSelectedProvince] = useState<string>('JAWA TIMUR');
-  const [selectedCity, setSelectedCity] = useState<string>('SURABAYA');
+  // Shared active region states for database tab (default to all regions)
+  const [selectedProvince, setSelectedProvince] = useState<string>('');
+  const [selectedCity, setSelectedCity] = useState<string>('');
 
   const handleResetAllData = async () => {
     try {
@@ -300,11 +328,22 @@ export default function App() {
       }
 
       // 3. Load team members
+      const teamSeed = getInitialTeamMembers();
       try {
         const res = await fetch('/api/team');
         if (res.ok) {
           const data = await res.json();
-          setTeamMembers(data);
+          if (Array.isArray(data) && data.length > 0) {
+            setTeamMembers(data);
+            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data));
+          } else if (Array.isArray(data) && data.length === 0) {
+            // Server returned empty team list (e.g. reset or empty)
+            setTeamMembers([]);
+            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify([]));
+          } else {
+            setTeamMembers(teamSeed);
+            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
+          }
         } else {
           throw new Error('Not ok');
         }
@@ -313,15 +352,19 @@ export default function App() {
         const savedTeam = localStorage.getItem(TEAM_STORAGE_KEY);
         if (savedTeam) {
           try {
-            setTeamMembers(JSON.parse(savedTeam));
+            const parsed = JSON.parse(savedTeam);
+            if (Array.isArray(parsed)) {
+              setTeamMembers(parsed);
+            } else {
+              setTeamMembers(teamSeed);
+              localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
+            }
           } catch (err) {
             console.error('Failed to parse saved team, falling back to seed', err);
-            const teamSeed = getInitialTeamMembers();
             setTeamMembers(teamSeed);
             localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
           }
         } else {
-          const teamSeed = getInitialTeamMembers();
           setTeamMembers(teamSeed);
           localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teamSeed));
         }
@@ -355,7 +398,20 @@ export default function App() {
         }
       }
 
-      // 5. Load session
+      // 5. Load activity logs
+      try {
+        const res = await fetch('/api/activities');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setActivities(data);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load activity logs from server', e);
+      }
+
+      // 6. Load session
       const savedUser = localStorage.getItem('ae_marketing_tracker_current_user_v1');
       if (savedUser) {
         try {
@@ -629,7 +685,14 @@ export default function App() {
   };
 
   // Callback to register team member
-  const handleAddTeamMember = async (name: string, role: UserRole, username: string, password?: string) => {
+  const handleAddTeamMember = async (
+    name: string, 
+    role: UserRole, 
+    username: string, 
+    password?: string,
+    assignedProvinces?: string[],
+    assignedCities?: string[]
+  ) => {
     const cleanUsername = username.toLowerCase().trim();
     const cleanPassword = password?.trim() || 'password123';
 
@@ -639,6 +702,8 @@ export default function App() {
       role,
       username: cleanUsername,
       password: cleanPassword,
+      assignedProvinces: assignedProvinces || [],
+      assignedCities: assignedCities || [],
     };
 
     try {
@@ -662,6 +727,32 @@ export default function App() {
     }
 
     const nextTeam = [...teamMembers.filter(t => t.username !== cleanUsername), newMember];
+    saveTeamMembers(nextTeam);
+  };
+
+  // Callback to update existing team member (e.g. assigned regions)
+  const handleUpdateTeamMember = async (updatedMember: TeamMember) => {
+    try {
+      const res = await fetch('/api/team', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedMember)
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        const memberWithPass = { ...saved, password: updatedMember.password || 'password123' };
+        setTeamMembers(prev => {
+          const next = prev.map(t => t.id === saved.id ? memberWithPass : t);
+          localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(next));
+          return next;
+        });
+        return;
+      }
+    } catch (e) {
+      console.error('Failed updating team member on server', e);
+    }
+
+    const nextTeam = teamMembers.map(t => t.id === updatedMember.id ? updatedMember : t);
     saveTeamMembers(nextTeam);
   };
 
@@ -774,17 +865,60 @@ export default function App() {
       if (!newCustomDb[provUpper]) newCustomDb[provUpper] = {};
       if (!newCustomDb[provUpper][cityUpper]) newCustomDb[provUpper][cityUpper] = [];
 
-      const existingNames = new Set(newCustomDb[provUpper][cityUpper].map(s => s.name ? s.name.toUpperCase().trim() : ''));
-      if (savedResult.namaSekolah && !existingNames.has(savedResult.namaSekolah.toUpperCase().trim())) {
+      const searchName = (savedResult.originalName || savedResult.namaSekolah).toUpperCase().trim();
+      const targetName = savedResult.namaSekolah.toUpperCase().trim();
+
+      const existingIdx = newCustomDb[provUpper][cityUpper].findIndex(
+        s => s.name && (s.name.toUpperCase().trim() === searchName || s.name.toUpperCase().trim() === targetName)
+      );
+
+      if (existingIdx !== -1) {
+        newCustomDb[provUpper][cityUpper][existingIdx] = {
+          ...newCustomDb[provUpper][cityUpper][existingIdx],
+          name: savedResult.namaSekolah,
+          instagram: savedResult.instagramHandle || '',
+          tiktok: savedResult.tiktokHandle || ''
+        };
+        saveCustomDatabase(newCustomDb);
+      } else if (savedResult.namaSekolah) {
         newCustomDb[provUpper][cityUpper].push({
           name: savedResult.namaSekolah,
           instagram: savedResult.instagramHandle || '',
           tiktok: savedResult.tiktokHandle || ''
         });
         saveCustomDatabase(newCustomDb);
-      } else if (!newCustomDb[provUpper][cityUpper]) {
-        saveCustomDatabase(newCustomDb);
       }
+    }
+
+    // Automatically record activity log
+    if (currentUser) {
+      let actionType: ActivityActionType = 'UPDATE_CATATAN';
+      let desc = `Memperbarui data & catatan sekolah ${savedResult.namaSekolah}.`;
+      if (isNew) {
+        actionType = 'TAMBAH_SEKOLAH';
+        desc = `Menambahkan sekolah baru ${savedResult.namaSekolah} (${savedResult.kota || 'Kota'}).`;
+      } else if (savedResult.status === 'DEAL' || (savedResult.status as string) === 'CLOSED') {
+        actionType = 'CLOSING_DEAL';
+        desc = `Closing DEAL dengan ${savedResult.namaSekolah}!`;
+      } else if (savedResult.status === 'MEETING / VISIT') {
+        actionType = 'MEETING_VISIT';
+        desc = `Meeting Visit dengan ${savedResult.namaSekolah}.`;
+      } else if (savedResult.status === 'FOLLOW UP') {
+        actionType = 'FOLLOW_UP';
+        desc = `Melakukan follow up untuk ${savedResult.namaSekolah}.`;
+      }
+
+      handleAddActivity({
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        actionType,
+        schoolName: savedResult.namaSekolah,
+        province: savedResult.provinsi,
+        city: savedResult.kota,
+        timestamp: new Date().toISOString(),
+        description: desc,
+        periode: savedResult.periode || selectedAcademicYearFilter || '2026/2027'
+      });
     }
   };
 
@@ -1137,12 +1271,17 @@ export default function App() {
           {activeTab === 'dashboard' && (
             <Dashboard 
               schools={displaySchools} 
+              teamMembers={teamMembers}
+              activities={activities}
+              onAddActivity={handleAddActivity}
+              onDeleteActivity={handleDeleteActivity}
               onSelectSchool={(school) => {
                 setSelectedSchool(school);
                 setIsDetailOpen(true);
               }}
               onFilterStatus={handleDashboardFilterStatus}
               onFilterPic={handleDashboardFilterPic}
+              currentUser={currentUser}
             />
           )}
 
@@ -1167,6 +1306,7 @@ export default function App() {
               selectedCity={selectedCity}
               setSelectedProvince={setSelectedProvince}
               setSelectedCity={setSelectedCity}
+              currentUser={currentUser}
             />
           )}
 
@@ -1191,6 +1331,7 @@ export default function App() {
               selectedCity={selectedCity}
               setSelectedProvince={setSelectedProvince}
               setSelectedCity={setSelectedCity}
+              currentUser={currentUser}
             />
           )}
 
@@ -1198,6 +1339,10 @@ export default function App() {
             <MasterDataManagement
               schools={schools}
               academicYears={academicYears}
+              customDatabase={customDatabase}
+              mergedDatabase={mergedDatabase}
+              teamMembers={teamMembers}
+              activities={activities}
               onImport={handleImportBulkSchools}
               onReset={handleResetAllData}
               onViewProspects={() => setActiveTab('prospects')}
@@ -1216,6 +1361,7 @@ export default function App() {
               teamMembers={teamMembers}
               schools={schools}
               onAddMember={handleAddTeamMember}
+              onUpdateMember={handleUpdateTeamMember}
               onDeleteMember={handleDeleteTeamMember}
               onResetTeam={handleResetTeam}
               currentUser={currentUser}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember } from '../types';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
 import { SURVEYED_DATABASE } from '../data/surveyedSchools';
 import { INDONESIAN_PROVINCES_DATA, formatCityName, isSameCity } from '../data/indonesiaData';
 import { 
@@ -14,7 +15,7 @@ import {
   User, 
   BookOpen, 
   Clipboard, 
-  Sparkles, 
+  Zap, 
   Check, 
   MapPin, 
   Briefcase,
@@ -310,6 +311,7 @@ export default function SchoolDetailModal({
     onSave({
       no: school ? school.no : 0, // 0 triggers backend/App.tsx auto-increment assignment
       namaSekolah: trimmedName,
+      originalName: school?.originalName || trimmedName,
       provinsi: provinsi.trim(),
       kota: kota.trim(),
       instagramHandle: instagramHandle.trim(),
@@ -384,7 +386,7 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
           {school && (
             <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl shadow-2xs">
               <div className="flex items-center space-x-2 text-[10px] font-extrabold text-slate-500 uppercase tracking-widest">
-                <Sparkles className="h-4 w-4 text-indigo-500" />
+                <Zap className="h-4 w-4 text-amber-500" />
                 <span>Quick Actions AE:</span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -653,9 +655,12 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                     <input
                       type="text"
                       id="modal-instagram-handle"
-                      value={instagramHandle.replace('@', '')}
+                      value={instagramHandle ? instagramHandle.replace(/^@+/, '') : ''}
                       disabled={disableCoreFields}
-                      onChange={(e) => setInstagramHandle('@' + e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value.trim().replace(/^@+/, '');
+                        setInstagramHandle(val ? `@${val}` : '');
+                      }}
                       placeholder="osisluqmanalhakim"
                       className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                     />
@@ -669,9 +674,12 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
                     <input
                       type="text"
                       id="modal-tiktok-handle"
-                      value={tiktokHandle.replace('@', '')}
+                      value={tiktokHandle ? tiktokHandle.replace(/^@+/, '') : ''}
                       disabled={disableCoreFields}
-                      onChange={(e) => setTiktokHandle('@' + e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value.trim().replace(/^@+/, '');
+                        setTiktokHandle(val ? `@${val}` : '');
+                      }}
                       placeholder="osisluqman_tiktok"
                       className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold transition-all disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed"
                     />
@@ -988,38 +996,15 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="flex justify-center sm:justify-start">
             {school && onDelete && (currentUser.role === 'SUPERADMIN' || currentUser.role === 'MANAGER' || currentUser.role === 'AE') && (
-              showDeleteConfirm ? (
-                <div className="flex items-center gap-2 bg-rose-50 p-1.5 rounded-xl border border-rose-200 animate-fade-in">
-                  <span className="text-xs font-bold text-rose-800 px-1">Yakin hapus prospek ini?</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onDelete(school.no, school.namaSekolah || namaSekolah);
-                      onClose();
-                    }}
-                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
-                  >
-                    Ya, Hapus
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowDeleteConfirm(false)}
-                    className="px-2.5 py-1.5 bg-white text-slate-700 border border-slate-200 rounded-lg text-xs font-bold hover:bg-slate-50 transition-all cursor-pointer"
-                  >
-                    Batal
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowDeleteConfirm(true)}
-                  id="modal-delete-school-btn"
-                  className="w-full sm:w-auto px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center space-x-1.5 text-xs font-bold transition-all border border-rose-100 cursor-pointer animate-fade-in"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  <span>Hapus Prospek</span>
-                </button>
-              )
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                id="modal-delete-school-btn"
+                className="w-full sm:w-auto px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center space-x-1.5 text-xs font-bold transition-all border border-rose-100 cursor-pointer animate-fade-in"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>Hapus Prospek</span>
+              </button>
             )}
           </div>
 
@@ -1043,6 +1028,27 @@ Catatan Akhir: ${updates.length > 0 ? updates[updates.length - 1] : catatanAwal 
         </div>
 
       </div>
+
+      {/* Alert Delete Verification Modal for School Prospect */}
+      {school && (
+        <ConfirmDeleteModal
+          isOpen={showDeleteConfirm}
+          title="Konfirmasi Hapus Prospek Sekolah"
+          itemName={school.namaSekolah || namaSekolah || 'Sekolah Tanpa Nama'}
+          itemDetails={`Wilayah: ${school.kota || kota}, ${school.provinsi || provinsi} | Status: ${status} | PIC AE: ${picMarketing || 'Belum ditugaskan'}`}
+          warningMessage="Apakah Anda yakin ingin menghapus data sekolah prospek ini? Seluruh riwayat timeline CRM dan kontak PIC untuk sekolah ini akan dihapus permanen dari sistem."
+          confirmText="Ya, Hapus Prospek Ini"
+          cancelText="Batal"
+          onClose={() => setShowDeleteConfirm(false)}
+          onConfirm={() => {
+            if (onDelete) {
+              onDelete(school.no, school.namaSekolah || namaSekolah);
+            }
+            setShowDeleteConfirm(false);
+            onClose();
+          }}
+        />
+      )}
     </div>
   );
 }

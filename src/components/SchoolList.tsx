@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SchoolRecord, MarketingStatus, ClosingProbability } from '../types';
+import { SchoolRecord, MarketingStatus, ClosingProbability, TeamMember } from '../types';
 import { SURVEYED_DATABASE } from '../data/surveyedSchools';
 import { INDONESIAN_PROVINCES_DATA, formatCityName, isSameCity } from '../data/indonesiaData';
 import { 
@@ -19,7 +19,11 @@ import {
   MessageSquare,
   MapPin,
   Layers,
-  Sparkles,
+  Globe,
+  Compass,
+  BarChart2,
+  ClipboardList,
+  Save,
   TrendingUp,
   Trash2,
   X,
@@ -27,7 +31,8 @@ import {
   List,
   ArrowUpDown,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Download
 } from 'lucide-react';
 import { generateWhatsAppLink, extractPhoneNumber } from '../lib/phoneUtils';
 
@@ -48,6 +53,7 @@ interface SchoolListProps {
   selectedCity?: string;
   setSelectedProvince?: (prov: string) => void;
   setSelectedCity?: (city: string) => void;
+  currentUser?: TeamMember;
 }
 
 export default function SchoolList({ 
@@ -66,11 +72,12 @@ export default function SchoolList({
   selectedProvince: propSelectedProvince,
   selectedCity: propSelectedCity,
   setSelectedProvince: propSetSelectedProvince,
-  setSelectedCity: propSetSelectedCity
+  setSelectedCity: propSetSelectedCity,
+  currentUser
 }: SchoolListProps) {
-  // Navigation Flow State
-  const [localProvince, setLocalProvince] = useState<string>('JAWA TIMUR');
-  const [localCity, setLocalCity] = useState<string>('SURABAYA');
+  // Navigation Flow State (default to all regions)
+  const [localProvince, setLocalProvince] = useState<string>('');
+  const [localCity, setLocalCity] = useState<string>('');
 
   const selectedProvince = propSelectedProvince ?? localProvince;
   const selectedCity = propSelectedCity ?? localCity;
@@ -719,7 +726,20 @@ export default function SchoolList({
       return true;
     });
 
-    const total = Math.max(surveyedInScope.length, activeInScope.length);
+    const surveyedKeys = new Set(surveyedInScope.map(item => `${item.prov}_${item.city}_${item.name.toLowerCase().trim()}`));
+    let extraActive = 0;
+    activeInScope.forEach((s) => {
+      const prov = s.provinsi?.toUpperCase().trim() || '';
+      const city = s.kota?.toUpperCase().trim() || '';
+      const keyOriginal = `${prov}_${city}_${s.originalName?.toLowerCase().trim()}`;
+      const keyName = `${prov}_${city}_${s.namaSekolah?.toLowerCase().trim()}`;
+
+      if (!surveyedKeys.has(keyOriginal) && !surveyedKeys.has(keyName)) {
+        extraActive++;
+      }
+    });
+
+    const total = surveyedInScope.length + extraActive;
     const activeCount = activeInScope.length;
 
     let baru = 0;
@@ -997,6 +1017,71 @@ export default function SchoolList({
     onSelectSchool(partialSchool);
   };
 
+  // Quick export prospects to CSV
+  const handleQuickExportCSV = () => {
+    const listToExport = sortedActiveFilteredSchools.length > 0 ? sortedActiveFilteredSchools : schools;
+    if (listToExport.length === 0) return;
+
+    const headers = [
+      'NO', 'PROVINSI', 'KOTA / KABUPATEN', 'NAMA SEKOLAH', 'INSTAGRAM HANDLE', 'TIKTOK HANDLE',
+      'PIC MARKETING', 'MARKETING LAPANGAN', 'STATUS', 'KONTAK PIC 1', 'KONTAK PIC 2',
+      'KONTAK PIC 3', 'KONTAK PIC 4', 'TANGGAL KONTAK AWAL', 'JENIS LAYANAN', 'CATATAN AWAL',
+      'TANGGAL FOLLOW UP TERAKHIR', 'KEMUNGKINAN CLOSING',
+      'UPDATE 1', 'UPDATE 2', 'UPDATE 3', 'UPDATE 4', 'UPDATE 5', 'UPDATE 6', 'UPDATE 7'
+    ];
+
+    const escapeCell = (val: any) => {
+      if (val === undefined || val === null) return '';
+      const str = String(val);
+      if (str.includes(';') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const headerLine = headers.join(';');
+    const bodyLines = listToExport.map((s, idx) => {
+      const up = s.updates || [];
+      return [
+        s.no || idx + 1,
+        s.provinsi || '',
+        s.kota || '',
+        s.namaSekolah || '',
+        s.instagramHandle || '',
+        s.tiktokHandle || '',
+        s.picMarketing || '',
+        s.marketingLapangan || '',
+        s.status || 'BARU',
+        s.kontakPic1 || '',
+        s.kontakPic2 || '',
+        s.kontakPic3 || '',
+        s.kontakPic4 || '',
+        s.tanggalKontakAwal || '',
+        s.jenisLayanan || '',
+        s.catatanAwal || '',
+        s.tanggalFollowUpTerakhir || '',
+        s.kemungkinanClosing || '',
+        up[0] || '',
+        up[1] || '',
+        up[2] || '',
+        up[3] || '',
+        up[4] || '',
+        up[5] || '',
+        up[6] || ''
+      ].map(escapeCell).join(';');
+    });
+
+    const csvContent = '\uFEFF' + [headerLine, ...bodyLines].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Daftar_Prospek_Sekolah_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="space-y-5" id="school-list-container">
       
@@ -1024,22 +1109,62 @@ export default function SchoolList({
         </div>
 
         {viewMode === 'prospects' && (
-          <button
-            onClick={onAddSchool}
-            id="list-add-new-school-trigger"
-            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl flex items-center justify-center space-x-2 text-xs font-bold transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer w-full sm:w-auto"
-          >
-            <Plus className="h-4 w-4" />
-            <span>+ Tambah Prospek Manual</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={handleQuickExportCSV}
+              id="list-quick-export-csv"
+              className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl flex items-center justify-center space-x-1.5 text-xs font-bold transition-all border border-slate-300/80 cursor-pointer w-full sm:w-auto active:scale-95"
+              title="Ekspor daftar prospek saat ini ke file CSV / Excel"
+            >
+              <Download className="h-4 w-4 text-slate-600" />
+              <span>Ekspor CSV ({sortedActiveFilteredSchools.length})</span>
+            </button>
+
+            <button
+              onClick={onAddSchool}
+              id="list-add-new-school-trigger"
+              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl flex items-center justify-center space-x-2 text-xs font-bold transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer w-full sm:w-auto"
+            >
+              <Plus className="h-4 w-4" />
+              <span>+ Tambah Prospek Manual</span>
+            </button>
+          </div>
         )}
       </div>
+
+      {/* Notification banner if user has assigned region checkpoints */}
+      {currentUser && ((currentUser.assignedProvinces?.length || 0) > 0 || (currentUser.assignedCities?.length || 0) > 0) && (
+        <div className="bg-indigo-50 border border-indigo-200 p-3.5 rounded-2xl flex items-center justify-between text-xs font-semibold text-indigo-950 shadow-2xs">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-1.5 bg-indigo-600 text-white rounded-lg">
+              <MapPin className="h-4 w-4 shrink-0" />
+            </div>
+            <div>
+              <p className="font-extrabold text-indigo-900 text-xs">
+                Hak Akses Wilayah Penugasan Resmi ({currentUser.name})
+              </p>
+              <p className="text-[11px] text-indigo-700 font-medium mt-0.5">
+                Wilayah ditugaskan oleh Manager: {' '}
+                <strong>
+                  {currentUser.assignedProvinces?.length 
+                    ? `${currentUser.assignedProvinces.join(', ')}` 
+                    : 'Seluruh Indonesia'}
+                </strong>
+                {currentUser.assignedCities?.length ? ` (${currentUser.assignedCities.length} Kota/Kab)` : ''}.
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] bg-indigo-600 text-white font-black px-2.5 py-1 rounded-full uppercase tracking-wider shrink-0 hidden sm:inline-block">
+            Checkpoint Region Active
+          </span>
+        </div>
+      )}
 
       {/* Unified Regional Selection Bar - Controls both Active Prospects list and Target Database */}
       <div className="bg-gradient-to-r from-indigo-50/50 to-slate-50 p-5 rounded-2xl border border-indigo-100/80 shadow-xs grid grid-cols-1 sm:grid-cols-2 gap-4" id="database-mode-controls">
         <div>
           <label className="block text-[10px] font-extrabold text-indigo-600 uppercase tracking-wider mb-1.5 flex items-center">
-            <Sparkles className="h-3 w-3 mr-1 text-indigo-500 animate-pulse" /> Pilih Provinsi
+            <Globe className="h-3.5 w-3.5 mr-1 text-indigo-500" /> Pilih Provinsi
           </label>
           <select
             id="province-db-select"
@@ -1048,9 +1173,14 @@ export default function SchoolList({
             className="w-full p-2.5 bg-white border border-indigo-200/60 rounded-xl text-slate-800 text-xs font-bold focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all shadow-2xs"
           >
             <option value="">-- SEMUA PROVINSI --</option>
-            {provinces.map(prov => (
-              <option key={prov} value={prov}>{prov}</option>
-            ))}
+            {provinces.map(prov => {
+              const isAssigned = currentUser?.assignedProvinces?.includes(prov);
+              return (
+                <option key={prov} value={prov}>
+                  {prov}{isAssigned ? ' [DITUGASKAN]' : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
 
@@ -1068,9 +1198,14 @@ export default function SchoolList({
             className="w-full p-2.5 bg-white border border-indigo-200/60 rounded-xl text-slate-800 text-xs font-bold focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all shadow-2xs"
           >
             <option value="">-- SEMUA KOTA/KABUPATEN --</option>
-            {cities.map(ct => (
-              <option key={ct} value={ct}>{ct}</option>
-            ))}
+            {cities.map(ct => {
+              const isAssigned = currentUser?.assignedCities?.includes(ct);
+              return (
+                <option key={ct} value={ct}>
+                  {ct}{isAssigned ? ' [DITUGASKAN]' : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
 
@@ -1096,7 +1231,7 @@ export default function SchoolList({
                   : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100'
               }`}
             >
-              <Sparkles className="h-3.5 w-3.5" />
+              <Compass className="h-3.5 w-3.5" />
               <span>{isExpanding ? 'Tutup Formulir Ekspansi' : '+ Ekspansi Wilayah / Target Baru'}</span>
             </button>
           )}
@@ -1108,7 +1243,7 @@ export default function SchoolList({
         <div className="flex justify-between items-center flex-wrap gap-2">
           <div>
             <h3 className="font-extrabold text-slate-900 text-xs sm:text-sm uppercase tracking-wider flex items-center gap-1.5">
-              <Sparkles className="h-4.5 w-4.5 text-indigo-500 animate-pulse" /> Akumulasi Status Wilayah
+              <BarChart2 className="h-4.5 w-4.5 text-indigo-500" /> Akumulasi Status Wilayah
             </h3>
             <p className="text-[10px] text-slate-500 font-medium mt-0.5">
               Wilayah aktif: <span className="text-indigo-600 font-black">{getActiveRegionLabel()}</span>
@@ -1389,7 +1524,7 @@ export default function SchoolList({
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <div>
               <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                <Sparkles className="h-4.5 w-4.5 text-indigo-500 animate-pulse" /> Ekspansi Wilayah & Database Target Baru
+                <Compass className="h-4.5 w-4.5 text-indigo-500" /> Ekspansi Wilayah & Database Target Baru
               </h3>
               <p className="text-[11px] text-slate-500 font-medium">Tambah provinsi baru, kota/kabupaten baru, dan daftar sekolah target secara massal.</p>
             </div>
@@ -1661,7 +1796,7 @@ export default function SchoolList({
                     onClick={() => setShowBatchPaste(!showBatchPaste)}
                     className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
                   >
-                    <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+                    <ClipboardList className="h-3.5 w-3.5 text-indigo-500" />
                     <span>{showBatchPaste ? 'Sembunyikan Paste Massal' : 'Paste Massal'}</span>
                   </button>
                 </div>
@@ -1691,7 +1826,7 @@ export default function SchoolList({
               onClick={handleSaveExpansion}
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer flex items-center gap-1.5 animate-fade-in"
             >
-              <Sparkles className="h-3.5 w-3.5" />
+              <Save className="h-3.5 w-3.5" />
               <span>Simpan ke Database Target</span>
             </button>
           </div>
@@ -1997,22 +2132,43 @@ export default function SchoolList({
                     </h3>
 
                     {/* Social Media Link */}
-                    <div className="mt-2.5 flex items-center space-x-1.5">
-                      {sch.instagram ? (
-                        <a
-                          href={`https://instagram.com/${sch.instagram.replace('@', '')}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
-                        >
-                          <Instagram className="h-3.5 w-3.5" />
-                          <span>{sch.instagram}</span>
-                          <ExternalLink className="h-2.5 w-2.5" />
-                        </a>
-                      ) : (
-                        <p className="text-[10px] text-slate-400 italic">Akun IG belum disurvey</p>
-                      )}
-                    </div>
+                    {(() => {
+                      const effIg = activeRecord?.instagramHandle || sch.instagram;
+                      const effTiktok = activeRecord?.tiktokHandle || sch.tiktok;
+                      return (
+                        <div className="mt-2.5 flex flex-wrap gap-2 items-center">
+                          {effIg ? (
+                            <a
+                              href={`https://instagram.com/${effIg.replace(/^@+/, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
+                            >
+                              <Instagram className="h-3.5 w-3.5" />
+                              <span>{effIg}</span>
+                              <ExternalLink className="h-2.5 w-2.5" />
+                            </a>
+                          ) : null}
+
+                          {effTiktok ? (
+                            <a
+                              href={`https://tiktok.com/@${effTiktok.replace(/^@+/, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center space-x-1 text-xs text-slate-800 font-semibold hover:underline"
+                            >
+                              <span className="font-bold text-[10px] bg-slate-900 text-white px-1 rounded-xs">T</span>
+                              <span>{effTiktok}</span>
+                              <ExternalLink className="h-2.5 w-2.5" />
+                            </a>
+                          ) : null}
+
+                          {!effIg && !effTiktok && (
+                            <p className="text-[10px] text-slate-400 italic">Sosial Media Kosong</p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Assigned PIC and last comment if active */}
                     {isMatched && activeRecord ? (
@@ -2117,7 +2273,7 @@ export default function SchoolList({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {hasInsta ? (
                         <a
-                          href={`https://instagram.com/${school.instagramHandle?.replace('@', '')}`}
+                          href={`https://instagram.com/${school.instagramHandle?.replace(/^@+/, '')}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
@@ -2131,7 +2287,7 @@ export default function SchoolList({
 
                       {school.tiktokHandle ? (
                         <a
-                          href={`https://tiktok.com/@${school.tiktokHandle?.replace('@', '')}`}
+                          href={`https://tiktok.com/@${school.tiktokHandle?.replace(/^@+/, '')}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
@@ -2313,19 +2469,39 @@ export default function SchoolList({
                           {sch.name}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
-                          {sch.instagram ? (
-                            <a
-                              href={`https://instagram.com/${sch.instagram.replace('@', '')}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
-                            >
-                              <Instagram className="h-3.5 w-3.5" />
-                              <span>{sch.instagram}</span>
-                            </a>
-                          ) : (
-                            <span className="text-[10px] text-slate-400 italic">-</span>
-                          )}
+                          {(() => {
+                            const effIg = activeRecord?.instagramHandle || sch.instagram;
+                            const effTiktok = activeRecord?.tiktokHandle || sch.tiktok;
+                            return (
+                              <div className="flex flex-col space-y-1">
+                                {effIg ? (
+                                  <a
+                                    href={`https://instagram.com/${effIg.replace(/^@+/, '')}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center space-x-1 text-xs text-rose-600 font-semibold hover:underline"
+                                  >
+                                    <Instagram className="h-3.5 w-3.5" />
+                                    <span>{effIg}</span>
+                                  </a>
+                                ) : null}
+                                {effTiktok ? (
+                                  <a
+                                    href={`https://tiktok.com/@${effTiktok.replace(/^@+/, '')}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center space-x-1 text-xs text-slate-800 font-semibold hover:underline"
+                                  >
+                                    <span className="font-bold text-[9px] bg-slate-900 text-white px-1 rounded-xs">T</span>
+                                    <span>{effTiktok}</span>
+                                  </a>
+                                ) : null}
+                                {!effIg && !effTiktok && (
+                                  <span className="text-[10px] text-slate-400 italic">-</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           {isMatched && activeRecord ? (
@@ -2433,7 +2609,7 @@ export default function SchoolList({
                           <div className="flex flex-col space-y-1">
                             {hasInsta ? (
                               <a
-                                href={`https://instagram.com/${school.instagramHandle?.replace('@', '')}`}
+                                href={`https://instagram.com/${school.instagramHandle?.replace(/^@+/, '')}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()}
@@ -2446,7 +2622,7 @@ export default function SchoolList({
 
                             {school.tiktokHandle ? (
                               <a
-                                href={`https://tiktok.com/@${school.tiktokHandle?.replace('@', '')}`}
+                                href={`https://tiktok.com/@${school.tiktokHandle?.replace(/^@+/, '')}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()}

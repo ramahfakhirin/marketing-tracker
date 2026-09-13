@@ -45,6 +45,8 @@ export interface TeamMember {
   role: UserRole;
   username: string;
   password?: string;
+  assignedProvinces?: string[]; // E.g., ['JAWA TIMUR', 'BALI']
+  assignedCities?: string[]; // E.g., ['KOTA SURABAYA', 'KABUPATEN SIDOARJO']
 }
 
 export interface MarketingStats {
@@ -52,4 +54,25 @@ export interface MarketingStats {
   byStatus: Record<MarketingStatus, number>;
   byClosingProbability: Record<string, number>;
   byPic: Record<string, number>;
+}
+
+export type ActivityActionType = 
+  | 'UPDATE_CATATAN' 
+  | 'UBAH_STATUS' 
+  | 'TAMBAH_SEKOLAH' 
+  | 'MEETING_VISIT' 
+  | 'FOLLOW_UP' 
+  | 'CLOSING_DEAL';
+
+export interface ActivityLog {
+  id: string;
+  userName: string;
+  userRole: UserRole;
+  actionType: ActivityActionType;
+  schoolName: string;
+  province?: string;
+  city?: string;
+  timestamp: string; // ISO date string e.g. "2026-08-03T09:30:00.000Z"
+  description: string;
+  periode?: string;
 }

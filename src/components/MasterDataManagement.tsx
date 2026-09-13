@@ -2,11 +2,15 @@ import React, { useState } from 'react';
 import { SchoolRecord, AcademicYear } from '../types';
 import CSVImportExport from './CSVImportExport';
 import AcademicYearManagement from './AcademicYearManagement';
-import { Database, FileSpreadsheet, Calendar, Sparkles } from 'lucide-react';
+import { Database, FileSpreadsheet, Calendar, CalendarCheck } from 'lucide-react';
 
 interface MasterDataManagementProps {
   schools: SchoolRecord[];
   academicYears: AcademicYear[];
+  customDatabase?: Record<string, Record<string, any[]>>;
+  mergedDatabase?: Record<string, Record<string, any[]>>;
+  teamMembers?: any[];
+  activities?: any[];
   onImport: (imported: SchoolRecord[]) => void;
   onReset: () => void;
   onViewProspects: () => void;
@@ -20,6 +24,10 @@ interface MasterDataManagementProps {
 export default function MasterDataManagement({
   schools,
   academicYears,
+  customDatabase,
+  mergedDatabase,
+  teamMembers,
+  activities,
   onImport,
   onReset,
   onViewProspects,
@@ -54,7 +62,7 @@ export default function MasterDataManagement({
           </div>
 
           <div className="flex items-center gap-2 self-start md:self-auto bg-white/10 backdrop-blur-md px-3 py-2 rounded-xl border border-white/15 text-xs">
-            <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
+            <CalendarCheck className="h-4 w-4 text-amber-400 shrink-0" />
             <div>
               <p className="text-[10px] uppercase font-bold text-slate-300">Periode Aktif Utama</p>
               <p className="font-black text-white text-xs">{activePeriodName}</p>
@@ -100,6 +108,11 @@ export default function MasterDataManagement({
         {activeSubTab === 'csv' ? (
           <CSVImportExport
             schools={schools}
+            customDatabase={customDatabase}
+            mergedDatabase={mergedDatabase}
+            teamMembers={teamMembers}
+            academicYears={academicYears}
+            activities={activities}
             onImport={onImport}
             onReset={onReset}
             onViewProspects={onViewProspects}

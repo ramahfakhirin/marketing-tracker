@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AcademicYear, AcademicYearStatus, SchoolRecord } from '../types';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
 import { 
   Calendar, 
   Plus, 
@@ -7,7 +8,7 @@ import {
   Trash2, 
   CheckCircle2, 
   X, 
-  Sparkles, 
+  BadgeCheck, 
   Clock, 
   Archive, 
   FolderKanban,
@@ -41,7 +42,7 @@ export default function AcademicYearManagement({
   const [endDate, setEndDate] = useState('');
   const [status, setStatus] = useState<AcademicYearStatus>('MENDATANG');
   const [note, setNote] = useState('');
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [yearToDelete, setYearToDelete] = useState<AcademicYear | null>(null);
 
   // Open modal for new year
   const handleOpenAddModal = () => {
@@ -257,7 +258,7 @@ export default function AcademicYearManagement({
                 )}
                 {isAktif && (
                   <span className="text-[10px] font-extrabold text-emerald-600 flex items-center gap-1">
-                    <Sparkles className="h-3 w-3 animate-pulse text-emerald-500" />
+                    <BadgeCheck className="h-3.5 w-3.5 text-emerald-500" />
                     <span>Periode Utama</span>
                   </span>
                 )}
@@ -271,33 +272,14 @@ export default function AcademicYearManagement({
                     <span>Edit</span>
                   </button>
 
-                  {deleteConfirmId === ay.id ? (
-                    <div className="flex items-center space-x-1">
-                      <button
-                        onClick={() => {
-                          onDeleteAcademicYear(ay.id);
-                          setDeleteConfirmId(null);
-                        }}
-                        className="text-[10px] font-black bg-rose-600 text-white px-2 py-0.5 rounded hover:bg-rose-700 cursor-pointer"
-                      >
-                        Ya, Hapus
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirmId(null)}
-                        className="text-[10px] font-bold text-slate-500 hover:text-slate-700 px-1 cursor-pointer"
-                      >
-                        Batal
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirmId(ay.id)}
-                      className="text-xs font-bold text-slate-400 hover:text-rose-600 flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span>Hapus</span>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setYearToDelete(ay)}
+                    id={`btn-delete-academic-year-${ay.id}`}
+                    className="text-xs font-bold text-slate-400 hover:text-rose-600 flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Hapus</span>
+                  </button>
                 </div>
               </div>
 
@@ -444,6 +426,34 @@ export default function AcademicYearManagement({
         </div>
       )}
 
+      {/* Alert Delete Verification Modal for Academic Years */}
+      {yearToDelete && (() => {
+        const count = getSchoolCountForYear(yearToDelete.yearName);
+        let warning = `Penghapusan periode "${yearToDelete.yearName}" bersifat permanen.`;
+        if (count > 0) {
+          warning += ` Terdapat ${count} data sekolah prospek pada periode ini. Data sekolah tidak akan langsung terhapus, namun filter periode tahun ajaran ini akan dihilangkan dari sistem.`;
+        }
+        if (yearToDelete.status === 'AKTIF') {
+          warning += ` PERINGATAN: Periode ini saat ini berstatus AKTIF (Periode Berjalan). Disarankan untuk mengaktifkan periode lain terlebih dahulu.`;
+        }
+
+        return (
+          <ConfirmDeleteModal
+            isOpen={!!yearToDelete}
+            title="Konfirmasi Hapus Periode Tahun Ajaran"
+            itemName={yearToDelete.yearName}
+            itemDetails={`Judul: ${yearToDelete.title} | Status: ${yearToDelete.status} | Total Project: ${count}`}
+            warningMessage={warning}
+            confirmText="Ya, Hapus Periode Ini"
+            cancelText="Batal"
+            onClose={() => setYearToDelete(null)}
+            onConfirm={() => {
+              onDeleteAcademicYear(yearToDelete.id);
+              setYearToDelete(null);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }

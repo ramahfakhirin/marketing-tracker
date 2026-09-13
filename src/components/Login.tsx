@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { TeamMember, UserRole } from '../types';
-import { Lock, User, Briefcase, KeyRound, AlertCircle, Sparkles } from 'lucide-react';
+import { Lock, User, Briefcase, KeyRound, AlertCircle } from 'lucide-react';
 
 interface LoginProps {
   teamMembers: TeamMember[];

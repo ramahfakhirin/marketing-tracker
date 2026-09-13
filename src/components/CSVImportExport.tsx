@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { SchoolRecord, MarketingStatus, ClosingProbability } from '../types';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
 import { 
   Download, 
   Upload, 
@@ -15,17 +16,36 @@ import {
   Loader2,
   Eye,
   ArrowRight,
-  X
+  X,
+  FileJson,
+  Layers,
+  Cloud,
+  ExternalLink
 } from 'lucide-react';
 
 interface CSVImportExportProps {
   schools: SchoolRecord[];
+  customDatabase?: Record<string, Record<string, any[]>>;
+  mergedDatabase?: Record<string, Record<string, any[]>>;
+  teamMembers?: any[];
+  academicYears?: any[];
+  activities?: any[];
   onImport: (newSchools: SchoolRecord[]) => Promise<any> | void;
   onReset: () => void;
   onViewProspects?: () => void;
 }
 
-export default function CSVImportExport({ schools, onImport, onReset, onViewProspects }: CSVImportExportProps) {
+export default function CSVImportExport({ 
+  schools, 
+  customDatabase,
+  mergedDatabase,
+  teamMembers = [],
+  academicYears = [],
+  activities = [],
+  onImport, 
+  onReset, 
+  onViewProspects 
+}: CSVImportExportProps) {
   const [statusMessage, setStatusMessage] = useState('');
   const [errorDetail, setErrorDetail] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
@@ -39,6 +59,9 @@ export default function CSVImportExport({ schools, onImport, onReset, onViewPros
   const [isSavingToDb, setIsSavingToDb] = useState<boolean>(false);
   const [isSavedSuccess, setIsSavedSuccess] = useState<boolean>(false);
   const [savedCount, setSavedCount] = useState<number>(0);
+
+  // Danger zone reset modal state
+  const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
 
   // Helper to escape CSV cell contents
   const escapeCSV = (cell: string | number | undefined, delimiter: string = ';'): string => {
@@ -206,6 +229,104 @@ export default function CSVImportExport({ schools, onImport, onReset, onViewPros
     document.body.removeChild(link);
 
     setStatusMessage(`Berhasil mengekspor ${schools.length} data prospek ke file CSV!`);
+    setIsSuccess(true);
+    setTimeout(() => {
+      setStatusMessage('');
+      setIsSuccess(false);
+    }, 4000);
+  };
+
+  // Export Entire Survey Database CSV (Semua database target per provinsi & kota)
+  const handleExportAllSchoolsCSV = () => {
+    const dbToExport = mergedDatabase || customDatabase || {};
+    const rows: string[][] = [];
+    let counter = 1;
+
+    Object.keys(dbToExport).sort().forEach(prov => {
+      const cities = dbToExport[prov] || {};
+      Object.keys(cities).sort().forEach(city => {
+        const schoolList = cities[city] || [];
+        schoolList.forEach((sch: any) => {
+          if (sch && sch.name) {
+            rows.push([
+              String(counter++),
+              prov,
+              city,
+              sch.name,
+              sch.instagram || sch.instagramHandle || '',
+              sch.tiktok || sch.tiktokHandle || ''
+            ]);
+          }
+        });
+      });
+    });
+
+    if (rows.length === 0) {
+      setErrorDetail('Tidak ada data direktori sekolah wilayah untuk diekspor.');
+      return;
+    }
+
+    const delimiter = selectedDelimiter;
+    const headers = ['NO', 'PROVINSI', 'KOTA / KABUPATEN', 'NAMA SEKOLAH', 'INSTAGRAM HANDLE', 'TIKTOK HANDLE'];
+    const headerLine = headers.map(h => escapeCSV(h, delimiter)).join(delimiter);
+    const bodyLines = rows.map(r => r.map(c => escapeCSV(c, delimiter)).join(delimiter));
+    const csvContent = '\uFEFF' + [headerLine, ...bodyLines].join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Database_Direktori_Sekolah_Wilayah_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setStatusMessage(`Berhasil mengekspor ${rows.length} direktori database sekolah ke CSV!`);
+    setIsSuccess(true);
+    setTimeout(() => {
+      setStatusMessage('');
+      setIsSuccess(false);
+    }, 4000);
+  };
+
+  // Export Complete Backup Database JSON (Full Dump)
+  const handleExportFullBackupJSON = () => {
+    const backupPayload = {
+      backupDate: new Date().toISOString(),
+      appName: "Sistem Manajemen Prospek Marketing AE",
+      version: "2.5.0",
+      summary: {
+        totalSchools: schools.length,
+        totalTeam: teamMembers.length,
+        totalActivities: activities.length,
+        totalAcademicYears: academicYears.length
+      },
+      schools,
+      customDatabase: customDatabase || {},
+      team: teamMembers.map(t => ({
+        id: t.id,
+        name: t.name,
+        role: t.role,
+        username: t.username,
+        phone: t.phone || '',
+        assignedProvinces: t.assignedProvinces || [],
+        assignedCities: t.assignedCities || []
+      })),
+      academicYears,
+      activities
+    };
+
+    const jsonString = JSON.stringify(backupPayload, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Backup_Database_Lengkap_AE_CRM_${new Date().toISOString().slice(0, 10)}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setStatusMessage('Berhasil membuat & mengunduh file cadangan lengkap database (.json)!');
     setIsSuccess(true);
     setTimeout(() => {
       setStatusMessage('');
@@ -524,74 +645,136 @@ export default function CSVImportExport({ schools, onImport, onReset, onViewPros
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4" id="data-actions-grid">
-        {/* Download Template Action */}
-        <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-xl flex flex-col justify-between min-h-[170px] hover:border-emerald-200 transition-all duration-200" id="data-action-template">
-          <div>
-            <div className="flex items-center space-x-1.5 mb-1.5">
-              <FileCheck className="h-4 w-4 text-emerald-600" />
-              <h5 className="font-extrabold text-[10px] text-emerald-800 uppercase tracking-widest">1. Unduh Template CSV</h5>
-            </div>
-            <p className="text-xs text-slate-600 leading-relaxed">Dapatkan contoh file CSV dengan struktur kolom tertata rapi &amp; sesuai dengan semua field data prospek sekolah.</p>
-          </div>
-          <button
-            type="button"
-            onClick={handleDownloadTemplate}
-            id="download-csv-template-btn"
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
-          >
-            <Download className="h-4 w-4" />
-            <span>Unduh Template CSV</span>
-          </button>
+      {/* Section 1: Export & Backup Center */}
+      <div className="space-y-2">
+        <div className="flex items-center space-x-2 text-xs font-black text-slate-800 uppercase tracking-wider">
+          <Download className="h-4 w-4 text-indigo-600" />
+          <span>Pusat Ekspor &amp; Cadangan Database (Export &amp; Backup)</span>
         </div>
-
-        {/* Export Action */}
-        <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl flex flex-col justify-between min-h-[170px] hover:border-indigo-200 transition-all duration-200" id="data-action-export">
-          <div>
-            <div className="flex items-center space-x-1.5 mb-1.5">
-              <Download className="h-4 w-4 text-indigo-600" />
-              <h5 className="font-extrabold text-[10px] text-indigo-800 uppercase tracking-widest">2. Ekspor Data Progres</h5>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4" id="export-actions-grid">
+          {/* Export CRM Progress CSV */}
+          <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl flex flex-col justify-between min-h-[185px] hover:border-indigo-200 transition-all duration-200" id="data-action-export">
+            <div>
+              <div className="flex items-center space-x-1.5 mb-1.5">
+                <FileSpreadsheet className="h-4 w-4 text-indigo-600" />
+                <h5 className="font-extrabold text-[10px] text-indigo-800 uppercase tracking-widest">1. Ekspor Data Progres (CSV)</h5>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Unduh seluruh <b>{schools.length}</b> data prospek sekolah aktif beserta detail status, PIC, kontak telepon, dan riwayat update pipeline.
+              </p>
             </div>
-            <p className="text-xs text-slate-600 leading-relaxed">Unduh semua {schools.length} data prospek aktif ke dalam CSV yang ramah Excel / Google Sheets.</p>
-          </div>
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            id="export-csv-btn"
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
-          >
-            <Download className="h-4 w-4" />
-            <span>Unduh CSV Progres ({schools.length})</span>
-          </button>
-        </div>
-
-        {/* Import Action */}
-        <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col justify-between min-h-[170px] hover:border-slate-300 transition-all duration-200" id="data-action-import">
-          <div>
-            <div className="flex items-center space-x-1.5 mb-1.5">
-              <Upload className="h-4 w-4 text-slate-600" />
-              <h5 className="font-extrabold text-[10px] text-slate-500 uppercase tracking-widest">3. Impor / Unggah CSV</h5>
-            </div>
-            <p className="text-xs text-slate-600 leading-relaxed">Pilih file CSV marketing dari perangkat Anda untuk melihat pratinjau data sebelum disimpan ke database.</p>
-          </div>
-          <div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleImportCSV}
-              accept=".csv"
-              className="hidden"
-              id="csv-file-uploader"
-            />
             <button
               type="button"
-              onClick={triggerFileInput}
-              id="import-csv-trigger-btn"
-              className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all border border-indigo-200 cursor-pointer active:scale-98"
+              onClick={handleExportCSV}
+              id="export-csv-btn"
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
             >
-              <Upload className="h-4 w-4 text-indigo-600" />
-              <span>Pilih &amp; Baca File CSV</span>
+              <Download className="h-4 w-4" />
+              <span>Unduh CSV Progres ({schools.length})</span>
             </button>
+          </div>
+
+          {/* Export Target Database CSV */}
+          <div className="p-4 bg-sky-50/50 border border-sky-100 rounded-xl flex flex-col justify-between min-h-[185px] hover:border-sky-200 transition-all duration-200" id="data-action-export-db">
+            <div>
+              <div className="flex items-center space-x-1.5 mb-1.5">
+                <Layers className="h-4 w-4 text-sky-600" />
+                <h5 className="font-extrabold text-[10px] text-sky-800 uppercase tracking-widest">2. Ekspor Database Wilayah (CSV)</h5>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Unduh semua direktori sekolah yang telah disurvey per provinsi &amp; kota/kabupaten beserta akun Instagram &amp; TikTok.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleExportAllSchoolsCSV}
+              id="export-all-schools-csv-btn"
+              className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
+            >
+              <Download className="h-4 w-4" />
+              <span>Unduh Database Wilayah (CSV)</span>
+            </button>
+          </div>
+
+          {/* Export Full JSON Backup */}
+          <div className="p-4 bg-purple-50/50 border border-purple-100 rounded-xl flex flex-col justify-between min-h-[185px] hover:border-purple-200 transition-all duration-200" id="data-action-backup-json">
+            <div>
+              <div className="flex items-center space-x-1.5 mb-1.5">
+                <FileJson className="h-4 w-4 text-purple-600" />
+                <h5 className="font-extrabold text-[10px] text-purple-800 uppercase tracking-widest">3. Backup Database Penuh (.JSON)</h5>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Cadangan 1-klik untuk <b>100% data sistem</b>: Seluruh Prospek Sekolah, Database Wilayah, Tim Marketing, Log Aktivitas, dan Periode.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleExportFullBackupJSON}
+              id="export-full-backup-json-btn"
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
+            >
+              <Download className="h-4 w-4" />
+              <span>Unduh Backup Lengkap (.JSON)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 2: Import & Template Center */}
+      <div className="space-y-2 pt-2 border-t border-slate-200/80">
+        <div className="flex items-center space-x-2 text-xs font-black text-slate-800 uppercase tracking-wider">
+          <Upload className="h-4 w-4 text-indigo-600" />
+          <span>Pusat Impor &amp; Template CSV</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4" id="data-actions-grid">
+          {/* Download Template Action */}
+          <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-xl flex flex-col justify-between min-h-[160px] hover:border-emerald-200 transition-all duration-200" id="data-action-template">
+            <div>
+              <div className="flex items-center space-x-1.5 mb-1.5">
+                <FileCheck className="h-4 w-4 text-emerald-600" />
+                <h5 className="font-extrabold text-[10px] text-emerald-800 uppercase tracking-widest">A. Unduh Template CSV</h5>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">Dapatkan contoh file CSV dengan struktur kolom tertata rapi &amp; sesuai dengan semua field data prospek sekolah.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              id="download-csv-template-btn"
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
+            >
+              <Download className="h-4 w-4" />
+              <span>Unduh Template CSV</span>
+            </button>
+          </div>
+
+          {/* Import Action */}
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col justify-between min-h-[160px] hover:border-slate-300 transition-all duration-200" id="data-action-import">
+            <div>
+              <div className="flex items-center space-x-1.5 mb-1.5">
+                <Upload className="h-4 w-4 text-slate-600" />
+                <h5 className="font-extrabold text-[10px] text-slate-500 uppercase tracking-widest">B. Impor / Unggah CSV</h5>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">Pilih file CSV marketing dari perangkat Anda untuk melihat pratinjau data sebelum disimpan ke database.</p>
+            </div>
+            <div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleImportCSV}
+                accept=".csv"
+                className="hidden"
+                id="csv-file-uploader"
+              />
+              <button
+                type="button"
+                onClick={triggerFileInput}
+                id="import-csv-trigger-btn"
+                className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all border border-indigo-200 cursor-pointer active:scale-98"
+              >
+                <Upload className="h-4 w-4 text-indigo-600" />
+                <span>Pilih &amp; Baca File CSV</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -821,23 +1004,72 @@ export default function CSVImportExport({ schools, onImport, onReset, onViewPros
         </div>
         <button
           type="button"
-          onClick={() => {
-            if (confirm('Apakah Anda yakin ingin membersihkan seluruh database secara keseluruhan? Semua data sekolah, provinsi, dan kota/kabupaten akan dihapus bersih. Tindakan ini tidak dapat dibatalkan.')) {
-              onReset();
-              setStatusMessage('Database berhasil dibersihkan secara keseluruhan! Siap menginput dari awal.');
-              setIsSuccess(true);
-              setTimeout(() => {
-                setStatusMessage('');
-                setIsSuccess(false);
-              }, 4000);
-            }
-          }}
+          onClick={() => setShowResetConfirm(true)}
           id="reset-database-btn"
           className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 shadow-2xs active:scale-98"
         >
           <RotateCcw className="h-3.5 w-3.5 inline mr-1.5" />
           <span>Reset Semua Data</span>
         </button>
+      </div>
+
+      {/* Alert Delete Verification Modal for Database Reset */}
+      <ConfirmDeleteModal
+        isOpen={showResetConfirm}
+        title="Kosongkan Database Prospek Sekolah"
+        itemName="Seluruh Database Prospek Sekolah & Custom Region"
+        itemDetails={`Total Data Sekolah Aktif Saat Ini: ${schools.length} Data`}
+        warningMessage="Apakah Anda yakin ingin membersihkan seluruh database secara keseluruhan? Semua data sekolah, provinsi, dan kota/kabupaten custom akan dihapus bersih secara permanen. Tindakan ini tidak dapat dibatalkan."
+        confirmText="Ya, Reset Semua Data"
+        cancelText="Batal"
+        onClose={() => setShowResetConfirm(false)}
+        onConfirm={() => {
+          onReset();
+          setShowResetConfirm(false);
+          setStatusMessage('Database berhasil dibersihkan secara keseluruhan! Siap menginput dari awal.');
+          setIsSuccess(true);
+          setTimeout(() => {
+            setStatusMessage('');
+            setIsSuccess(false);
+          }, 4000);
+        }}
+      />
+
+      {/* Cloud Database & Direct API Access Info */}
+      <div className="p-4 bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-xl shadow-sm space-y-3" id="cloud-database-info-card">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-2.5">
+          <div className="flex items-center space-x-2">
+            <Cloud className="h-5 w-5 text-indigo-400" />
+            <h5 className="font-black text-xs text-white uppercase tracking-wider">Akses Database Cloud Live (Firebase Firestore &amp; REST API)</h5>
+          </div>
+          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full border border-emerald-500/30 self-start sm:self-auto">
+            Live Synchronized
+          </span>
+        </div>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Semua data tersimpan permanen di cloud <b>Firebase Firestore</b> (Project: <code className="text-amber-300 bg-white/10 px-1 py-0.5 rounded font-mono text-[11px]">ai-studio-marketingprogres-611dba30-dc03-4d23-b2e8-8901ace0a12a</code>). Anda juga dapat mengakses data mentah (raw JSON) langsung melalui endpoint API:
+        </p>
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <a
+            href="/api/backup-database?download=true"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all shadow-2xs"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span>Unduh JSON via API (/api/backup-database)</span>
+            <ExternalLink className="h-3 w-3" />
+          </a>
+          <a
+            href="https://console.firebase.google.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-slate-200 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all border border-white/10"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span>Buka Firebase Console</span>
+          </a>
+        </div>
       </div>
 
       {/* Info Tips */}

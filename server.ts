@@ -28,9 +28,14 @@ async function startServer() {
   let useFirestore = false;
   let firestoreDb: any = null;
 
-  // Initial team members seed (Super Admin only)
+  // Initial team members seed (Super Admin & Marketing Team)
   const initialTeamMembers = [
     { id: 'admin-1', name: 'Super Admin', role: 'SUPERADMIN', username: 'superadmin', password: 'admin123' },
+    { id: 'team-ae-1', name: 'Ahmad Fauzi', role: 'AE', username: 'ahmadfauzi', password: 'password123', assignedProvinces: ['JAWA TIMUR'], assignedCities: ['KOTA SURABAYA', 'KOTA MALANG'] },
+    { id: 'team-ae-2', name: 'Budi Santoso', role: 'AE', username: 'budisantoso', password: 'password123', assignedProvinces: ['JAWA TIMUR'], assignedCities: ['KOTA SURABAYA'] },
+    { id: 'team-ae-3', name: 'Rizky Pratama', role: 'AE', username: 'rizkypratama', password: 'password123', assignedProvinces: ['DKI JAKARTA'], assignedCities: ['KOTA JAKARTA SELATAN'] },
+    { id: 'team-mkt-1', name: 'Dewi Lestari', role: 'MARKETING_LAPANGAN', username: 'dewilestari', password: 'password123', assignedProvinces: ['JAWA TIMUR', 'BALI'], assignedCities: ['KOTA MALANG', 'KOTA DENPASAR'] },
+    { id: 'team-mkt-2', name: 'Siti Aminah', role: 'MARKETING_LAPANGAN', username: 'sitiaminah', password: 'password123', assignedProvinces: ['JAWA TENGAH'], assignedCities: ['KOTA SEMARANG'] }
   ];
 
   // Fallback in-memory data storage
@@ -79,6 +84,89 @@ async function startServer() {
 
   let inMemoryAcademicYears: any[] = [...defaultAcademicYears];
 
+  // Seed Activity Logs for KPI & User Updates Tracking
+  const now = new Date();
+  const todayISO = now.toISOString();
+  const yesterdayISO = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const threeDaysAgoISO = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  const tenDaysAgoISO = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString();
+  const twentyDaysAgoISO = new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000).toISOString();
+
+  let inMemoryActivities: any[] = [
+    {
+      id: 'act-1',
+      userName: 'Ahmad Fauzi',
+      userRole: 'AE',
+      actionType: 'UPDATE_CATATAN',
+      schoolName: 'SMA Negeri 1 Surabaya',
+      province: 'JAWA TIMUR',
+      city: 'KOTA SURABAYA',
+      timestamp: todayISO,
+      description: 'Mengirimkan sampel Yearbook Digital & proposal penawaran ke Wakasek Kesiswaan.',
+      periode: '2026/2027'
+    },
+    {
+      id: 'act-2',
+      userName: 'Dewi Lestari',
+      userRole: 'MARKETING_LAPANGAN',
+      actionType: 'TAMBAH_SEKOLAH',
+      schoolName: 'SMK Negeri 2 Malang',
+      province: 'JAWA TIMUR',
+      city: 'KOTA MALANG',
+      timestamp: todayISO,
+      description: 'Melakukan penjelajahan lapangan (scouting) & mengumpulkan data kontak OSIS.',
+      periode: '2026/2027'
+    },
+    {
+      id: 'act-3',
+      userName: 'Budi Santoso',
+      userRole: 'AE',
+      actionType: 'MEETING_VISIT',
+      schoolName: 'SMA Katolik St. Louis 1',
+      province: 'JAWA TIMUR',
+      city: 'KOTA SURABAYA',
+      timestamp: yesterdayISO,
+      description: 'Meeting tatap muka dengan Panitia Buku Tahunan & Guru Pembina.',
+      periode: '2026/2027'
+    },
+    {
+      id: 'act-4',
+      userName: 'Ahmad Fauzi',
+      userRole: 'AE',
+      actionType: 'CLOSING_DEAL',
+      schoolName: 'SMA Negeri 5 Surabaya',
+      province: 'JAWA TIMUR',
+      city: 'KOTA SURABAYA',
+      timestamp: threeDaysAgoISO,
+      description: 'Penandatanganan MOU SPK Buku Tahunan Cetak + Paket Event Graduation.',
+      periode: '2026/2027'
+    },
+    {
+      id: 'act-5',
+      userName: 'Dewi Lestari',
+      userRole: 'MARKETING_LAPANGAN',
+      actionType: 'FOLLOW_UP',
+      schoolName: 'SMA Negeri 1 Denpasar',
+      province: 'BALI',
+      city: 'KOTA DENPASAR',
+      timestamp: tenDaysAgoISO,
+      description: 'Follow up via WhatsApp & koordinasi awal proposal cetak.',
+      periode: '2026/2027'
+    },
+    {
+      id: 'act-6',
+      userName: 'Super Admin',
+      userRole: 'SUPERADMIN',
+      actionType: 'UBAH_STATUS',
+      schoolName: 'SMA Negeri 3 Semarang',
+      province: 'JAWA TENGAH',
+      city: 'KOTA SEMARANG',
+      timestamp: twentyDaysAgoISO,
+      description: 'Memverifikasi status prospek ke MEETING / VISIT.',
+      periode: '2026/2027'
+    }
+  ];
+
   // Utility to recursively sanitize objects for Firestore (removes undefined values)
   function sanitizeForFirestore(val: any): any {
     if (val === undefined) return "";
@@ -116,11 +204,26 @@ async function startServer() {
       try {
         const teamSnap = await getDocs(collection(firestoreDb, 'team'));
         if (teamSnap.empty) {
-          console.log("Seeding initial Super Admin into Firestore...");
-          await setDoc(doc(firestoreDb, 'team', initialTeamMembers[0].id), initialTeamMembers[0]);
+          console.log("Seeding initial team members into Firestore...");
+          for (const m of initialTeamMembers) {
+            await setDoc(doc(firestoreDb, 'team', m.id), m);
+          }
         }
       } catch (e) {
         console.warn("Firestore seed read/write skipped due to quota or connectivity:", e);
+      }
+
+      // Seed initial activities if Firestore collection is empty
+      try {
+        const actSnap = await getDocs(collection(firestoreDb, 'activities'));
+        if (actSnap.empty) {
+          console.log("Seeding initial activity logs into Firestore...");
+          for (const act of inMemoryActivities) {
+            await setDoc(doc(firestoreDb, 'activities', act.id), act);
+          }
+        }
+      } catch (e) {
+        console.warn("Firestore activities seed skipped due to quota or connectivity:", e);
       }
     }
   } catch (err) {
@@ -321,7 +424,9 @@ async function startServer() {
       name: member.name,
       role: member.role,
       username: cleanUsername,
-      password: pass
+      password: pass,
+      assignedProvinces: Array.isArray(member.assignedProvinces) ? member.assignedProvinces : [],
+      assignedCities: Array.isArray(member.assignedCities) ? member.assignedCities : []
     };
 
     if (usePostgres && pool) {
@@ -377,6 +482,8 @@ async function startServer() {
       return res.status(400).json({ error: "ID anggota tidak valid" });
     }
 
+    inMemoryTeam = inMemoryTeam.filter(t => t.id !== memberId);
+
     if (usePostgres && pool) {
       try {
         await pool.query("DELETE FROM team WHERE id = $1;", [memberId]);
@@ -390,14 +497,73 @@ async function startServer() {
         await deleteDoc(doc(firestoreDb, 'team', memberId));
         return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
       } catch (err) {
-        console.error("Failed to delete team member in Firestore, using in-memory", err);
-        inMemoryTeam = inMemoryTeam.filter(t => t.id !== memberId);
-        return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
+        console.error("Failed to delete team member in Firestore", err);
+        return res.json({ success: true, message: "Anggota tim berhasil dihapus dari cache" });
       }
     } else {
-      inMemoryTeam = inMemoryTeam.filter(t => t.id !== memberId);
       return res.json({ success: true, message: "Anggota tim berhasil dihapus" });
     }
+  });
+
+  // GET all activity logs
+  app.get("/api/activities", async (req, res) => {
+    if (useFirestore && firestoreDb) {
+      try {
+        const snap = await getDocs(collection(firestoreDb, 'activities'));
+        const list = snap.docs.map(d => d.data());
+        list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        return res.json(list);
+      } catch (e) {
+        console.error("Failed to fetch activities from Firestore, fallback to memory", e);
+      }
+    }
+    return res.json(inMemoryActivities);
+  });
+
+  // POST create a new activity log
+  app.post("/api/activities", async (req, res) => {
+    const act = req.body;
+    if (!act || !act.userName || !act.schoolName) {
+      return res.status(400).json({ error: "Data aktivitas tidak lengkap" });
+    }
+
+    const actObj = {
+      id: act.id || `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      userName: act.userName,
+      userRole: act.userRole || 'AE',
+      actionType: act.actionType || 'UPDATE_CATATAN',
+      schoolName: act.schoolName,
+      province: act.province || '',
+      city: act.city || '',
+      timestamp: act.timestamp || new Date().toISOString(),
+      description: act.description || '',
+      periode: act.periode || '2026/2027'
+    };
+
+    if (useFirestore && firestoreDb) {
+      try {
+        await setDoc(doc(firestoreDb, 'activities', actObj.id), actObj);
+      } catch (e) {
+        console.error("Failed to save activity to Firestore", e);
+      }
+    }
+
+    inMemoryActivities.unshift(actObj);
+    return res.json(actObj);
+  });
+
+  // DELETE an activity log
+  app.delete("/api/activities/:id", async (req, res) => {
+    const { id } = req.params;
+    inMemoryActivities = inMemoryActivities.filter(a => a.id !== id);
+    if (useFirestore && firestoreDb) {
+      try {
+        await deleteDoc(doc(firestoreDb, 'activities', id));
+      } catch (e) {
+        console.error("Failed to delete activity from Firestore", e);
+      }
+    }
+    return res.json({ success: true, id });
   });
 
   // RESET team members (Keep superadmin only)
@@ -514,35 +680,39 @@ async function startServer() {
               instagram_handle = $5, tiktok_handle = $6, pic_marketing = $7, marketing_lapangan = $8,
               status = $9, kontak_pic1 = $10, kontak_pic2 = $11, kontak_pic3 = $12, kontak_pic4 = $13,
               tanggal_kontak_awal = $14, jenis_layanan = $15, catatan_awal = $16, tanggal_follow_up_terakhir = $17,
-              kemungkinan_closing = $18, updates = $19
-             WHERE no = $20;`,
+              kemungkinan_closing = $18, updates = $19, periode = $20
+             WHERE no = $21;`,
             [
               school.namaSekolah, school.originalName || null, school.provinsi || null, school.kota || null,
               school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || '', school.marketingLapangan || null,
               school.status, school.kontakPic1 || '', school.kontakPic2 || '', school.kontakPic3 || '', school.kontakPic4 || '',
               school.tanggalKontakAwal || '', school.jenisLayanan || '', school.catatanAwal || '', school.tanggalFollowUpTerakhir || '',
-              school.kemungkinanClosing || '', updatesJson, school.no
+              school.kemungkinanClosing || '', updatesJson, school.periode || '2026/2027', school.no
             ]
           );
+          const idx = inMemorySchools.findIndex(s => s.no === school.no);
+          if (idx !== -1) inMemorySchools[idx] = school;
           return res.json(school);
         } else {
           const insertResult = await pool.query(
             `INSERT INTO schools (
               nama_sekolah, original_name, provinsi, kota, instagram_handle, tiktok_handle,
               pic_marketing, marketing_lapangan, status, kontak_pic1, kontak_pic2, kontak_pic3, kontak_pic4,
-              tanggal_kontak_awal, jenis_layanan, catatan_awal, tanggal_follow_up_terakhir, kemungkinan_closing, updates
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+              tanggal_kontak_awal, jenis_layanan, catatan_awal, tanggal_follow_up_terakhir, kemungkinan_closing, updates, periode
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
             RETURNING no;`,
             [
               school.namaSekolah, school.originalName || null, school.provinsi || null, school.kota || null,
               school.instagramHandle || null, school.tiktokHandle || null, school.picMarketing || '', school.marketingLapangan || null,
               school.status, school.kontakPic1 || '', school.kontakPic2 || '', school.kontakPic3 || '', school.kontakPic4 || '',
               school.tanggalKontakAwal || '', school.jenisLayanan || '', school.catatanAwal || '', school.tanggalFollowUpTerakhir || '',
-              school.kemungkinanClosing || '', updatesJson
+              school.kemungkinanClosing || '', updatesJson, school.periode || '2026/2027'
             ]
           );
           const newNo = insertResult.rows[0].no;
-          return res.json({ ...school, no: newNo });
+          const created = { ...school, no: newNo };
+          inMemorySchools.unshift(created);
+          return res.json(created);
         }
       } catch (err) {
         console.error("Failed to save school in Postgres", err);
@@ -606,6 +776,8 @@ async function startServer() {
       return res.status(400).json({ error: "Nomor sekolah tidak valid" });
     }
 
+    inMemorySchools = inMemorySchools.filter(s => s.no !== schoolNo);
+
     if (usePostgres && pool) {
       try {
         await pool.query("DELETE FROM schools WHERE no = $1;", [schoolNo]);
@@ -619,12 +791,10 @@ async function startServer() {
         await deleteDoc(doc(firestoreDb, 'schools', String(schoolNo)));
         return res.json({ success: true, message: "Sekolah berhasil dihapus" });
       } catch (err) {
-        console.error("Failed to delete school in Firestore, using in-memory", err);
-        inMemorySchools = inMemorySchools.filter(s => s.no !== schoolNo);
+        console.error("Failed to delete school in Firestore", err);
         return res.json({ success: true, message: "Sekolah berhasil dihapus" });
       }
     } else {
-      inMemorySchools = inMemorySchools.filter(s => s.no !== schoolNo);
       return res.json({ success: true, message: "Sekolah berhasil dihapus" });
     }
   });
@@ -1174,6 +1344,100 @@ async function startServer() {
     } else {
       inMemoryAcademicYears = inMemoryAcademicYears.filter(a => a.id !== ayId);
       return res.json({ success: true });
+    }
+  });
+
+  // FULL DATABASE EXPORT & BACKUP ENDPOINT
+  app.get("/api/backup-database", async (req, res) => {
+    try {
+      let currentSchools = [...inMemorySchools];
+      let currentCustomDb = { ...inMemoryCustomDb };
+      let currentTeam = [...inMemoryTeam];
+      let currentActivities = [...inMemoryActivities];
+      let currentAcademicYears = [...inMemoryAcademicYears];
+
+      if (useFirestore && firestoreDb) {
+        try {
+          const [schoolsSnap, customDbSnap, teamSnap, actSnap, aySnap] = await Promise.all([
+            getDocs(collection(firestoreDb, 'schools')),
+            getDocs(collection(firestoreDb, 'custom_database')),
+            getDocs(collection(firestoreDb, 'team')),
+            getDocs(collection(firestoreDb, 'activities')),
+            getDocs(collection(firestoreDb, 'academic_years'))
+          ]);
+
+          if (!schoolsSnap.empty) {
+            currentSchools = schoolsSnap.docs.map(d => d.data());
+          }
+          if (!teamSnap.empty) {
+            currentTeam = teamSnap.docs.map(d => d.data());
+          }
+          if (!actSnap.empty) {
+            currentActivities = actSnap.docs.map(d => d.data());
+          }
+          if (!aySnap.empty) {
+            currentAcademicYears = aySnap.docs.map(d => d.data());
+          }
+          if (!customDbSnap.empty) {
+            const structured: Record<string, Record<string, any[]>> = {};
+            customDbSnap.forEach(d => {
+              const row = d.data();
+              const prov = (row.provinsi || '').toUpperCase().trim();
+              const city = (row.kota || '').toUpperCase().trim();
+              if (prov && city) {
+                if (!structured[prov]) structured[prov] = {};
+                if (!structured[prov][city]) structured[prov][city] = [];
+                if (row.name && row.name.trim()) {
+                  structured[prov][city].push({
+                    name: row.name,
+                    instagramHandle: row.instagramHandle || row.instagram_handle || "",
+                    tiktokHandle: row.tiktokHandle || row.tiktok_handle || ""
+                  });
+                }
+              }
+            });
+            if (Object.keys(structured).length > 0) currentCustomDb = structured;
+          }
+        } catch (dbErr) {
+          console.warn("Could not query full Firestore snapshot, using cached in-memory state", dbErr);
+        }
+      }
+
+      const backupData = {
+        exportedAt: new Date().toISOString(),
+        appName: "AE Marketing Prospek CRM",
+        version: "2.5.0",
+        stats: {
+          totalSchools: currentSchools.length,
+          totalTeamMembers: currentTeam.length,
+          totalActivities: currentActivities.length,
+          totalAcademicYears: currentAcademicYears.length
+        },
+        schools: currentSchools,
+        customDatabase: currentCustomDb,
+        team: currentTeam.map(t => ({
+          id: t.id,
+          name: t.name,
+          role: t.role,
+          username: t.username,
+          phone: t.phone || '',
+          assignedProvinces: t.assignedProvinces || [],
+          assignedCities: t.assignedCities || []
+        })),
+        academicYears: currentAcademicYears,
+        activities: currentActivities
+      };
+
+      if (req.query.download === 'true') {
+        const filename = `Backup_Database_AE_Marketing_${new Date().toISOString().slice(0, 10)}.json`;
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Type', 'application/json');
+      }
+
+      return res.json(backupData);
+    } catch (err: any) {
+      console.error("Failed to generate database backup", err);
+      return res.status(500).json({ error: "Gagal membuat backup database: " + err.message });
     }
   });
 
