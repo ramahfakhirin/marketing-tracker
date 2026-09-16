@@ -290,7 +290,38 @@ export default function CSVImportExport({
   };
 
   // Export Complete Backup Database JSON (Full Dump)
-  const handleExportFullBackupJSON = () => {
+  const [isExportingFullBackup, setIsExportingFullBackup] = useState(false);
+  const handleExportFullBackupJSON = async () => {
+    setIsExportingFullBackup(true);
+    try {
+      // 1. First attempt to fetch the complete server-authoritative Firestore snapshot
+      const response = await fetch('/api/backup-database');
+      if (response.ok) {
+        const fullData = await response.json();
+        const jsonString = JSON.stringify(fullData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `Backup_Database_Lengkap_AE_CRM_${new Date().toISOString().slice(0, 10)}.json`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        setStatusMessage('Berhasil membuat & mengunduh file cadangan lengkap database (.json)!');
+        setIsSuccess(true);
+        setTimeout(() => {
+          setStatusMessage('');
+          setIsSuccess(false);
+        }, 4000);
+        setIsExportingFullBackup(false);
+        return;
+      }
+    } catch (fetchErr) {
+      console.warn("Could not fetch /api/backup-database, using in-app state backup", fetchErr);
+    }
+
+    // 2. Fallback to client-side payload
     const backupPayload = {
       backupDate: new Date().toISOString(),
       appName: "Sistem Manajemen Prospek Marketing AE",
@@ -328,6 +359,7 @@ export default function CSVImportExport({
 
     setStatusMessage('Berhasil membuat & mengunduh file cadangan lengkap database (.json)!');
     setIsSuccess(true);
+    setIsExportingFullBackup(false);
     setTimeout(() => {
       setStatusMessage('');
       setIsSuccess(false);
@@ -709,12 +741,22 @@ export default function CSVImportExport({
             </div>
             <button
               type="button"
+              disabled={isExportingFullBackup}
               onClick={handleExportFullBackupJSON}
               id="export-full-backup-json-btn"
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-400 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-2xs cursor-pointer active:scale-98"
             >
-              <Download className="h-4 w-4" />
-              <span>Unduh Backup Lengkap (.JSON)</span>
+              {isExportingFullBackup ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Mengambil Data Firestore...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4" />
+                  <span>Unduh Backup Lengkap (.JSON)</span>
+                </>
+              )}
             </button>
           </div>
         </div>
